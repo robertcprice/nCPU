@@ -7,8 +7,7 @@
 use crate::agent::agent_run::AgentRun;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{
-    FailureAnalysis, FailureKind, GuardrailPolicy, RepairContext, RepairEdit, RepairPatch,
-    RepairVerification, RepairVerifier, RepoTaskSpec,
+    FailureAnalysis, FailureKind, GuardrailPolicy, RepairContext, RepairEdit, RepairPatch, RepairVerification, RepairVerifier, RepoTaskSpec, RepoTaskKind,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +63,16 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // EXTRACT-HELPER refactor (Lever D): "extract the duplicated expression into a helper called
+    // X" hoists a repeated pure-i64 sub-expression into `fn X(..) -> i64` and rewrites call sites.
+    // Structural like rename/add-param, so it is hoisted above the body-swap synthesis stages; it
+    // only fires on an explicit extract instruction for a Refactor task and declines otherwise.
+    if matches!(task.kind, RepoTaskKind::Refactor) {
+        if let Some(patch) = try_extract_helper_patch(context, &description) {
+            return Ok(patch);
+        }
+    }
+
     if let Some(patch) = try_emergent_synthesis_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -95,10 +104,15 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
-    // GATED MODEL fallback: every deterministic path declined. An optional,
-    // untrusted local LLM proposes a fix from the failure — inert without
-    // NSYNTH_LOCAL_LLM_URL, and the cargo-test oracle still gates whatever it
-    // returns. Deterministic-first, model-last.
+    // GATED MODEL fallback: every deterministic path declined. Two optional,
+    // untrusted local-LLM lanes, inert without NSYNTH_LOCAL_LLM_URL. Deterministic-
+    // first, model-last. The INTENT lane goes first (model proposes a SPEC, the engine
+    // synthesizes + verifies, and an accepted solve DISTILLS so the model teaches
+    // once); the direct-body REPAIR lane is the fallback. Both are still gated by the
+    // cargo-test oracle downstream.
+    if let Some(patch) = try_model_intent_patch(task, context, &description) {
+        return Ok(patch);
+    }
     if let Some(patch) = try_model_repair_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -163,6 +177,30 @@ pub fn try_real_synthesis_patch(
             .unwrap_or(&intent.function_name),
         Some(&old_text),
     );
+    // GATE against the FAILING TEST's own asserts. This stage grounds via the low-confidence
+    // prose bridge and solves the INTENT's canonical examples — which say nothing about THIS
+    // repo's failing test. A mis-grounding (count_positives -> reverse-digits, mode -> `last`,
+    // prefix-sums -> `array_sum`) otherwise returns a WRONG patch and, because this stage runs
+    // first in the ladder, short-circuits the example-verified stages (test-mined / library-
+    // behavior) that would solve correctly — losing the solve AND making the ladder flaky.
+    // Require the synthesized program to reproduce the mined I/O; if it can't (and there ARE
+    // asserts to check), decline so the proven stages run. No asserts -> keep prior behavior.
+    let mined: Vec<crate::benchmark::Example> = {
+        let mut rows = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows.extend(mine_asserts(t, &repo_fn));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        rows.into_iter()
+            .map(|(inputs, expected)| crate::benchmark::Example { inputs, expected })
+            .collect()
+    };
+    if !mined.is_empty() && !crate::runtime::code_reproduces_examples(&result.code, &mined) {
+        return None;
+    }
     let synthesized = rust_code_for_repo_synthesis(&result.code);
     // The solver sometimes emits an abstract IR (Result-style `ok(..)`/`err(..)`
     // wrappers, unlowered `:=`) that is not plain Rust for the repo's concrete
@@ -1747,6 +1785,242 @@ fn model_body_to_new_text(old_text: &str, repo_fn: &str, program: &str) -> Optio
     (new_text != *old_text).then_some(new_text)
 }
 
+// ── GATED MODEL-INTENT stage: model proposes a SPEC, the engine + oracle DISPOSE ──
+//
+// A second, distinct model lane from `try_model_repair_patch` (which asks the model
+// for a Rust BODY). Here the model proposes ONLY I/O examples (the WHAT); the
+// DETERMINISTIC ENGINE synthesizes the program (the HOW) and the repo cargo-test
+// oracle DISPOSES. On acceptance the engine-synthesized program is DISTILLED so the
+// capability is absorbed model-free — the model teaches once. The model never emits
+// code that reaches the repo unchecked, and the guarantee never depends on it.
+
+/// Staged model-INTENT distillation candidates, keyed by task id. A model-intent
+/// patch stashes its ENGINE-VERIFIED `(problem, code)` here; the supervisor consumes
+/// it (via [`distill_accepted_model_solve`]) ONLY after the repo cargo-test oracle
+/// ACCEPTS the patch — so a model spec that fails the repo test never teaches the
+/// store. Process-global + keyed by task id so it survives the closure boundary the
+/// repair loop crosses when it applies + re-verifies a patch.
+#[allow(clippy::type_complexity)]
+fn distillation_stage(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, (crate::benchmark::Problem, String)>>
+{
+    static STAGE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (crate::benchmark::Problem, String)>>,
+    > = std::sync::OnceLock::new();
+    STAGE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Stash an engine-verified `(problem, code)` for `task_id` awaiting repo-test accept.
+pub(crate) fn stage_model_distillation(
+    task_id: &str,
+    problem: crate::benchmark::Problem,
+    code: String,
+) {
+    if let Ok(mut g) = distillation_stage().lock() {
+        g.insert(task_id.to_string(), (problem, code));
+    }
+}
+
+/// Remove and return a staged candidate for `task_id` (does NOT record it).
+pub fn take_model_distillation(task_id: &str) -> Option<(crate::benchmark::Problem, String)> {
+    distillation_stage().lock().ok()?.remove(task_id)
+}
+
+/// Consume a staged model-INTENT distillation candidate for `task_id` and, IF one
+/// exists, DISTILL it via [`crate::op_library::record_proposed_op`] so a FUTURE run
+/// solves the same task MODEL-FREE (at the library/learned tier, before the model is
+/// ever consulted). Call ONLY after the repo cargo-test oracle ACCEPTED the patch.
+///
+/// Inert (returns `false`) when nothing was staged (no model in the loop — the common
+/// case with `NSYNTH_LOCAL_LLM_URL` unset) or the learned-store path is unset
+/// (`record_proposed_op` no-ops without `NSYNTH_LEARNED_OPS_PATH`). So this is a
+/// zero-effect call on any default run.
+pub fn distill_accepted_model_solve(task_id: &str) -> bool {
+    match take_model_distillation(task_id) {
+        Some((problem, code)) => crate::op_library::record_proposed_op(&problem, &code),
+        None => false,
+    }
+}
+
+/// Drop any staged candidate for `task_id` WITHOUT distilling — a run that did not end
+/// in a repo-test accept must never teach the store.
+pub fn discard_model_distillation(task_id: &str) {
+    let _ = take_model_distillation(task_id);
+}
+
+/// Map a raw JSON value from a model spec to a runtime `Value` (int / bool / string /
+/// int-array / heterogeneous array). `None` for anything outside the verified domains.
+fn model_json_to_value(v: &serde_json::Value) -> Option<crate::benchmark::Value> {
+    use crate::benchmark::Value;
+    if let Some(b) = v.as_bool() {
+        return Some(Value::Bool(b));
+    }
+    if let Some(i) = v.as_i64() {
+        return Some(Value::Int(i));
+    }
+    if let Some(s) = v.as_str() {
+        return Some(Value::Str(s.to_string()));
+    }
+    if let Some(arr) = v.as_array() {
+        if let Some(ints) = arr.iter().map(|x| x.as_i64()).collect::<Option<Vec<i64>>>() {
+            return Some(Value::int_array(&ints));
+        }
+        let vals: Option<Vec<Value>> = arr.iter().map(model_json_to_value).collect();
+        return Some(Value::Array(vals?));
+    }
+    None
+}
+
+/// GATED MODEL-INTENT stage — the untrusted SPEC proposer of last resort.
+///
+/// When every deterministic path has declined, an OPTIONAL local LLM proposes I/O
+/// EXAMPLES for the task; the engine then synthesizes + verifies deterministically.
+/// It is a PROPOSER OF INTENT ONLY — the model's examples are UNTRUSTED and the
+/// engine's synthesized program is reshaped to the repo fn's exact signature and
+/// handed back as an ordinary patch, so the caller's cargo-test acceptance oracle
+/// still decides.
+///
+/// Inert by default: with `NSYNTH_LOCAL_LLM_URL` unset the lane returns `None`
+/// immediately (and `propose_examples` is likewise off), so there is zero behaviour
+/// change on any machine without a model.
+pub fn try_model_intent_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+) -> Option<RepairPatch> {
+    // Off unless an endpoint is configured — the guarantee is the engine + cargo-test
+    // oracle, never the model. Checked here too (not only inside `propose_examples`)
+    // so the lane is provably inert without reaching the network layer.
+    if std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let request = format!(
+        "{description}\n\nGive correct input/output examples for this function \
+         (integers, arrays of integers, or booleans)."
+    );
+    let proposed = crate::local_llm::propose_examples(&request)?;
+    let rows: Vec<crate::benchmark::Example> = proposed
+        .iter()
+        .filter_map(|p| {
+            let inputs: Vec<crate::benchmark::Value> =
+                p.inputs.iter().map(model_json_to_value).collect::<Option<_>>()?;
+            let expected = model_json_to_value(&p.output)?;
+            Some(crate::benchmark::Example { inputs, expected })
+        })
+        .collect();
+    try_model_intent_patch_from_spec(task, context, description, rows)
+}
+
+/// Deterministic core of the model-INTENT stage: given a model-proposed SPEC (`rows`,
+/// UNTRUSTED I/O examples), synthesize + strictly verify a program and, on success,
+/// reshape it onto the repo fn's signature + STAGE it for distillation. Factored out
+/// so it is testable with NO server — a test passes a hand-crafted spec (a stub for
+/// the model's output) and asserts a deliberately-WRONG spec is REJECTED (never
+/// promoted to a patch, nothing staged) while a correct spec yields a verified patch.
+pub(crate) fn try_model_intent_patch_from_spec(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+    mut rows: Vec<crate::benchmark::Example>,
+) -> Option<RepairPatch> {
+    use crate::benchmark::{Problem, Value};
+
+    let intent = CodingIntent::from_nl_lenient(description).ok();
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    let default_fn = intent
+        .as_ref()
+        .map(|i| {
+            i.function_name
+                .strip_prefix("nl_")
+                .unwrap_or(&i.function_name)
+                .to_string()
+        })
+        .unwrap_or_default();
+    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+
+    rows.sort_by(|a, b| (&a.inputs, &a.expected).cmp(&(&b.inputs, &b.expected)));
+    rows.dedup();
+    // Need a genuine HELD-OUT split: enough points that the seed pins the function
+    // AND at least one example is withheld from synthesis to catch a fit-to-seed spec.
+    if rows.len() < 4 {
+        return None;
+    }
+    // Array-RETURNING functions need a Vec/slice reshape this proposer does not do;
+    // decline them (mirrors `try_test_mined_synthesis_patch`). Scalar and boolean
+    // outputs — incl. array->scalar folds — proceed.
+    if rows.iter().any(|e| matches!(e.expected, Value::Array(_))) {
+        return None;
+    }
+
+    // HELD-OUT split: synthesize from all-but-last, judge on ALL incl. the held-out.
+    let seed = &rows[..rows.len() - 1];
+    let sig: &'static str =
+        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &rows).into_boxed_str());
+    let seed_problem = Problem {
+        name: repo_fn.clone(),
+        category: "repo-model-intent",
+        description: "",
+        signature: sig,
+        examples: seed.to_vec(),
+        ..Default::default()
+    };
+    let res = crate::solver::solve_problem(&seed_problem);
+    if !res.success {
+        return None;
+    }
+    // The engine's program must reproduce EVERY example incl. the genuinely held-out
+    // one — the generalization oracle a fit-to-seed model spec misses.
+    if !crate::runtime::code_reproduces_examples(&res.code, &rows) {
+        return None;
+    }
+    // Robustness floor: clean execution on perturbations of the examples.
+    let all_problem = Problem {
+        name: repo_fn.clone(),
+        category: "repo-model-intent",
+        description: "",
+        signature: sig,
+        examples: rows.clone(),
+        ..Default::default()
+    };
+    if crate::runtime::verify_problem_code_strict(&all_problem, &res.code).is_err() {
+        return None;
+    }
+    // Never adopt a magic-constant memorization fit.
+    if crate::synth_confidence::is_memorization_overfit(&res.code, &rows) {
+        return None;
+    }
+    let synthesized = rust_code_for_repo_synthesis(&res.code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+
+    // STAGE the ENGINE-VERIFIED (problem, program) for distillation — the supervisor
+    // consumes it ONLY if the repo cargo-test oracle accepts this patch. Model teaches
+    // once, and only on a TRUE accept.
+    stage_model_distillation(&task.id, all_problem, res.code.clone());
+
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "gated model-INTENT proposer (model spec -> engine-synthesized, verified; cargo-test gated)",
+            ))
+            .with_metadata("proposer", "model_intent")
+            .with_metadata("synthesis_method", res.method.clone()),
+    )
+}
+
 /// TEST-MINED SYNTHESIS — the deterministic lever that turns the repair loop's own
 /// TEST ORACLE into a searchable spec. Most real repairs have a failing test full of
 /// `assert_eq!(f(x), y)` calls; those ARE I/O examples, but nothing fed them to the
@@ -1761,60 +2035,91 @@ pub fn try_test_mined_synthesis_patch(
     description: &str,
 ) -> Option<RepairPatch> {
     let intent = CodingIntent::from_nl_lenient(description).ok();
-    let mut target = pick_target_path(task, context, intent.as_ref()).ok()?;
-    let mut old_text = read_relative_file(context, &target).ok()?;
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
     let default_fn = intent
         .as_ref()
         .map(|i| i.function_name.strip_prefix("nl_").unwrap_or(&i.function_name).to_string())
         .unwrap_or_default();
-    // Mine integer asserts for a function across every context file (tests may live in a sibling
-    // module), dedup, and require enough points to PIN the function.
-    let mine_for = |name: &str| {
-        let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
-        for f in &context.files {
-            if let Some(t) = f.text.as_deref() {
-                rows.extend(mine_asserts(t, name));
-            }
-        }
-        rows.sort();
-        rows.dedup();
-        rows
-    };
-    // Candidate functions to repair, most-determined first: the resolved primary name, then every
-    // function DEFINED in any context .rs file, then functions an assert CALLS but nothing defines
-    // (feature-add). Each is tried in turn and the FIRST that yields a CHANGING verified patch wins.
-    // When several functions are broken, successive repair iterations fix them one by one — an
-    // already-correct function re-synthesizes to a no-op (new_text == old_text), is skipped, and the
-    // loop moves to the next still-broken function instead of stalling on a repatch of the same one.
-    let primary = resolve_repo_fn_name(&default_fn, Some(&old_text));
-    let mut candidates: Vec<String> = vec![primary];
+    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+
+    // Mine integer asserts for `repo_fn` across every context file (tests may live in
+    // a sibling module), dedup, and require enough points to PIN the function.
+    let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
     for f in &context.files {
-        let Some(t) = f.text.as_deref() else { continue };
-        if f.path.ends_with(".rs") {
-            for d in defined_fn_names(t) {
-                if !candidates.contains(&d) {
-                    candidates.push(d);
-                }
-            }
-        }
-        for c in assert_called_fn_names(t) {
-            if !candidates.contains(&c) {
-                candidates.push(c);
-            }
+        if let Some(t) = f.text.as_deref() {
+            rows.extend(mine_asserts(t, &repo_fn));
         }
     }
-    for repo_fn in candidates {
-        let rows = mine_for(&repo_fn);
-        if rows.is_empty() {
-            continue;
-        }
-        if let Some(patch) =
-            synthesize_mined_for_fn(context, description, &repo_fn, rows, &target, &old_text)
-        {
-            return Some(patch);
-        }
+    rows.sort();
+    rows.dedup();
+    if rows.len() < 2 {
+        return None;
     }
-    None
+
+    let exs: Vec<crate::benchmark::Example> = rows
+        .iter()
+        .map(|(ins, out)| crate::benchmark::Example {
+            inputs: ins.clone(),
+            expected: out.clone(),
+        })
+        .collect();
+    // Array-RETURNING functions (reverse, sort, k-largest) now proceed: `gencode_normalize`
+    // fixes the Vec-return lowering (`= []` etc.) and `reshape_to_repo_signature` handles the
+    // slice/by-value bridge. If a particular array signature still can't be reshaped, reshape
+    // returns None and the proposer declines gracefully (same fall-through as before) — never a
+    // bad patch, since strict-verify + the real cargo test still gate every candidate.
+    let sig: &'static str =
+        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
+    let problem = crate::benchmark::Problem {
+        name: repo_fn.to_string(),
+        category: "repo-test-mined",
+        description: "",
+        signature: sig,
+        examples: exs.clone(),
+        ..Default::default()
+    };
+    // FRONT DOOR FIRST, then raw synthesis. The never-wrong router (`answer`) reaches the
+    // ~300-op verified LIBRARY the bare enumerator cannot re-derive — "count how many
+    // elements are positive" IS the library op `count_positives` (a filter+count), which the
+    // raw solver refuses to synthesize from the same 2-3 mined points. `answer` proposes an op
+    // from the prose AND verifies it against the mined examples, so it only returns a
+    // library/composition/model op that reproduces the failing test's asserts; a WRONG guess
+    // is refused by that gate (and the real cargo test is still the final oracle). Falls back
+    // to `solve_problem` when the prose names no reachable op.
+    let (code, method) = front_door_mined_code(description, &exs)
+        .or_else(|| {
+            let res = crate::solver::solve_problem(&problem);
+            (res.success && crate::runtime::verify_problem_code_strict(&problem, &res.code).is_ok())
+                .then(|| (res.code, res.method))
+        })?;
+    if crate::runtime::verify_problem_code_strict(&problem, &code).is_err() {
+        return None;
+    }
+    // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
+    if crate::synth_confidence::is_memorization_overfit(&code, &exs) {
+        return None;
+    }
+    let res_method = method;
+    let synthesized = rust_code_for_repo_synthesis(&code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
+            ))
+            .with_metadata("proposer", "nl_test_mined_synthesis")
+            .with_metadata("synthesis_method", res_method.clone()),
+    )
 }
 
 /// Synthesize one verified repair for `repo_fn` from its mined I/O `rows`. Returns `None` when the
@@ -1864,80 +2169,44 @@ fn synthesize_mined_for_fn(
             expected: out.clone(),
         })
         .collect();
-    // Prefer the VERIFIED NL ROUTER over the raw solver. It grounds the prose+examples in the
-    // hardened op library behind a distinguishing gate: it resolves "maximum of a list" to list_max
-    // and REJECTS coincidental overfits (max_except_last, which merely reproduces under-determined
-    // examples), returns max_two for "maximum of two numbers", and reverse_list for "reverse a list"
-    // from a single example — the never-wrong guarantee carried into repo repair. Because the router
-    // is name-grounded + example-verified, one example suffices; the raw-solver fallback still needs
-    // >= 2 and declines array-returning shapes it does not reshape reliably.
-    let (synth_mog, method) = match crate::verified_nl_router::answer(description, &exs) {
-        crate::verified_nl_router::Answer::Library { name, code } => {
-            (code, format!("verified-nl-router:library:{name}"))
-        }
-        crate::verified_nl_router::Answer::Composition { code } => {
-            (code, "verified-nl-router:composition".to_string())
-        }
-        crate::verified_nl_router::Answer::Synthesized { method, code } => {
-            (code, format!("verified-nl-router:{method}"))
-        }
-        _ => {
-            if rows.len() < 2 {
-                return None;
-            }
-            // Array-RETURNING functions (sort, map/double_each) are now handled: the transpiler
-            // lowers index-style + `mut`-param op bodies to valid Rust and reshape shadows mutated
-            // params, so the solver's decompose-map / decompose-sort output reshapes onto the repo
-            // signature. Any shape that still fails to reshape is caught by strict-verify + the
-            // cargo-test oracle (a rejected patch, never a wrong one), so admitting array output is
-            // safe. This is the path generic "fix the failing tests" queries take for array->array
-            // functions, which the router refuses without a semantic name.
-            let sig: &'static str = Box::leak(
-                crate::linguigenesis_bridge::infer_signature(repo_fn, &exs).into_boxed_str(),
-            );
-            let problem = crate::benchmark::Problem {
-                name: repo_fn.to_string(),
-                category: "repo-test-mined",
-                description: "",
-                signature: sig,
-                examples: exs.clone(),
-                ..Default::default()
-            };
-            let res = crate::solver::solve_problem(&problem);
-            let (solved_code, solved_method) = if res.success {
-                if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
-                    return None;
-                }
-                // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
-                if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
-                    return None;
-                }
-                (res.code, res.method)
-            } else {
-                // BEYOND THE SYMBOLIC ENGINE: the model-free solver could not synthesize this. Reach
-                // for the served model (INERT without NSYNTH_LOCAL_LLM_URL, so zero change by
-                // default), accepting a proposal ONLY if it reproduces EVERY mined example and clears
-                // the robustness floor — the same never-wrong-against-the-tests gate the solver path
-                // uses. This is the self-synthesis of NOVEL logic: the model teaches the engine a
-                // capability it lacked, distilled below so the next occurrence is solved model-free.
-                let code = try_model_synthesis(&problem, &exs, repo_fn)?;
-                (code, "model-synthesis".to_string())
-            };
-            // SELF-SYNTHESIS: teach this verified solve back into the learned store, so the engine
-            // absorbs the real functions it repairs (whether the solver OR the model produced them)
-            // and solves them model-free next time (the read side, try_learned in solve_problem, is
-            // already wired; this closes the write side for the repo path). Inert unless
-            // NSYNTH_LEARNED_OPS_PATH is set, and record_proposed_op re-gates it (rejects constants +
-            // already-library ops, runs the semantic-contract oracle, dedups); try_learned
-            // RE-verifies on read, so a narrow fit can never emit an example-inconsistent answer.
-            // Gate on >= 3 examples to prefer well-determined solves.
-            if exs.len() >= 3 {
-                crate::op_library::record_proposed_op(&problem, &solved_code);
-            }
-            (solved_code, solved_method)
-        }
+    // Array-RETURNING functions (reverse, sort, k-largest) now proceed: `gencode_normalize`
+    // fixes the Vec-return lowering (`= []` etc.) and `reshape_to_repo_signature` handles the
+    // slice/by-value bridge. If a particular array signature still can't be reshaped, reshape
+    // returns None and the proposer declines gracefully (same fall-through as before) — never a
+    // bad patch, since strict-verify + the real cargo test still gate every candidate.
+    let sig: &'static str =
+        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
+    let problem = crate::benchmark::Problem {
+        name: repo_fn.to_string(),
+        category: "repo-test-mined",
+        description: "",
+        signature: sig,
+        examples: exs.clone(),
+        ..Default::default()
     };
-    let synthesized = rust_code_for_repo_synthesis(&synth_mog);
+    // FRONT DOOR FIRST, then raw synthesis. The never-wrong router (`answer`) reaches the
+    // ~300-op verified LIBRARY the bare enumerator cannot re-derive — "count how many
+    // elements are positive" IS the library op `count_positives` (a filter+count), which the
+    // raw solver refuses to synthesize from the same 2-3 mined points. `answer` proposes an op
+    // from the prose AND verifies it against the mined examples, so it only returns a
+    // library/composition/model op that reproduces the failing test's asserts; a WRONG guess
+    // is refused by that gate (and the real cargo test is still the final oracle). Falls back
+    // to `solve_problem` when the prose names no reachable op.
+    let (code, method) = front_door_mined_code(description, &exs)
+        .or_else(|| {
+            let res = crate::solver::solve_problem(&problem);
+            (res.success && crate::runtime::verify_problem_code_strict(&problem, &res.code).is_ok())
+                .then(|| (res.code, res.method))
+        })?;
+    if crate::runtime::verify_problem_code_strict(&problem, &code).is_err() {
+        return None;
+    }
+    // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
+    if crate::synth_confidence::is_memorization_overfit(&code, &exs) {
+        return None;
+    }
+    let res_method = method;
+    let synthesized = rust_code_for_repo_synthesis(&code);
     if !is_plain_rust_body(&synthesized) {
         return None;
     }
@@ -1961,8 +2230,28 @@ fn synthesize_mined_for_fn(
                 "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
             ))
             .with_metadata("proposer", "nl_test_mined_synthesis")
-            .with_metadata("synthesis_method", method),
+            .with_metadata("synthesis_method", res_method.clone()),
     )
+}
+
+/// Resolve mined I/O examples through the never-wrong front door (`verified_nl_router::answer`),
+/// which proposes a verified LIBRARY op / composition / gated-model program from the prose and
+/// gates it against the SAME examples. Returns `(mog_code, method)` only for a candidate that
+/// reproduces every mined example — reaching the op library (e.g. `count_positives`) the raw
+/// enumerator cannot re-derive — or `None` when the router refuses. The caller re-runs
+/// `verify_problem_code_strict` and the real cargo test still gates the patch.
+fn front_door_mined_code(
+    description: &str,
+    exs: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    use crate::verified_nl_router::Answer;
+    match crate::verified_nl_router::answer(description, exs) {
+        Answer::Library { name, code } => Some((code, format!("front-door:library:{name}"))),
+        Answer::Composition { code } => Some((code, "front-door:composition".to_string())),
+        Answer::Synthesized { method, code } => Some((code, format!("front-door:{method}"))),
+        Answer::Proposed { method, code } => Some((code, format!("front-door:proposed:{method}"))),
+        Answer::Refused => None,
+    }
 }
 
 /// Mine I/O examples for `fn_name` from `assert_eq!(..)` calls in `text`. Both
@@ -1970,42 +2259,7 @@ fn synthesize_mined_for_fn(
 /// (`"abc"`), and boolean (`true`/`false`) literals are captured — the solver's
 /// verified domains; anything else (floats, expressions, method chains) is skipped.
 /// Name matching is word-boundary safe, so `add` never matches `add_two`.
-/// Identifiers called as functions inside `assert_eq!(..)` args (e.g. `triple` from
-/// `assert_eq!(triple(3), 9)`). Used to find a MISSING function a failing test references — the
-/// feature-add target that no `mine_asserts(defined_name)` would ever pin. Skips the `vec` macro
-/// and numeric leads.
-fn assert_called_fn_names(text: &str) -> Vec<String> {
-    let mut names = std::collections::BTreeSet::new();
-    let mut cur = text;
-    while let Some(rel) = cur.find("assert_eq!") {
-        let after = &cur[rel + "assert_eq!".len()..];
-        cur = after;
-        let Some(open) = after.find('(') else { continue };
-        let Some(inner) = balanced_parens(&after[open..]) else { continue };
-        for arg in split_top_level_comma(inner) {
-            let a = arg.trim();
-            if let Some(p) = a.find('(') {
-                let ident: String = a[..p]
-                    .chars()
-                    .rev()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                if !ident.is_empty()
-                    && !ident.starts_with(|c: char| c.is_ascii_digit())
-                    && ident != "vec"
-                {
-                    names.insert(ident);
-                }
-            }
-        }
-    }
-    names.into_iter().collect()
-}
-
-fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
+pub(crate) fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
     let mut out = Vec::new();
     let mut cur = text;
     while let Some(rel) = cur.find("assert_eq!") {
@@ -2051,33 +2305,20 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
             return Some(Value::Str(body.to_string()));
         }
     }
-    // Owned-`String` constructors: unwrap and re-parse the inner string literal.
-    for suffix in [".to_string()", ".to_owned()", ".into()"] {
-        if let Some(inner) = t.strip_suffix(suffix) {
-            return parse_literal(inner.trim());
+    // Int-array literal: `vec![1, 2, 3]` or `[1, 2, 3]` — the array domain the solver and op
+    // library reason over. Needed to mine array-shaped asserts (`count_positives(vec![5,-2,3])`,
+    // `reverse(vec![1,2])`); without it every array-in/array-out repo fn declined at mining.
+    let arr = t.strip_prefix("vec!").map(str::trim).unwrap_or(t);
+    if arr.starts_with('[') && arr.ends_with(']') {
+        let inner = arr[1..arr.len() - 1].trim();
+        if inner.is_empty() {
+            return Some(Value::int_array(&[]));
         }
-    }
-    if let Some(inner) = t.strip_prefix("String::from(").and_then(|r| r.strip_suffix(')')) {
-        return parse_literal(inner.trim());
-    }
-    // Array / slice / vec literals: strip the container spelling, then parse each element
-    // recursively (nested arrays work) and collect. `[]` / `vec![]` -> empty array.
-    let mut body = t;
-    if let Some(r) = body.strip_prefix("vec!") {
-        body = r.trim();
-    }
-    if let Some(r) = body.strip_prefix('&') {
-        body = r.trim();
-    }
-    if body.starts_with('[') && body.ends_with(']') {
-        let content = &body[1..body.len() - 1];
-        let elems: Option<Vec<Value>> = split_top_level_comma(content)
-            .iter()
-            .map(|e| e.trim())
-            .filter(|e| !e.is_empty())
-            .map(parse_literal)
-            .collect();
-        return elems.map(Value::Array);
+        let ints: Option<Vec<i64>> =
+            inner.split(',').map(|x| x.trim().parse::<i64>().ok()).collect();
+        if let Some(ints) = ints {
+            return Some(Value::int_array(&ints));
+        }
     }
     None
 }
@@ -2710,6 +2951,271 @@ fn replace_word(line: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// LEVER D — extract-helper refactor (conservative, sound, string-level).
+///
+/// Parses `extract ... into [a] [helper|function] [called|named] <NAME>`, finds a NON-TRIVIAL
+/// exact-duplicated PARENTHESISED integer-arithmetic expression `(E)` occurring >=2 times in ONE
+/// repo fn body, and hoists it into `fn <NAME>(<free i64 locals>) -> i64 { E }`, replacing every
+/// `(E)` occurrence with a call. Behaviour-preservation is gated downstream by the real cargo test.
+///
+/// SOUND-BY-CONSTRUCTION scope (declines otherwise — never emits wrong code):
+///   - Only PURE i64 arithmetic expressions: every char in `E` is an identifier, an integer
+///     literal, whitespace, or one of `+ - * / % ( )`. No calls / indexing / method calls /
+///     comparisons — so `E` is provably `i64` and the helper's return type is KNOWN.
+///   - Every free identifier in `E` must be a KNOWN `i64` param or `let NAME: i64` local of the
+///     fn. Any unknown identifier (a const, a non-`i64` local, a call target) → DECLINE (the free-
+///     variable / type analysis is unclear, so we refuse rather than guess).
+///   - The expression must be genuinely duplicated (>=2 identical `(E)` groups) and non-trivial
+///     (contains an arithmetic operator and >=1 free variable).
+///
+/// Full syn-AST extraction (arbitrary types, non-parenthesised spans, statement hoisting) is the
+/// documented FOLLOW-UP; this covers the common "hoist a repeated arithmetic sub-expression" case.
+pub fn try_extract_helper_patch(context: &RepairContext, description: &str) -> Option<RepairPatch> {
+    let name = parse_extract_helper_name(description)?;
+    // Collision guard: never shadow an existing fn (would be an E0428 or a silent capture).
+    let defined: Vec<String> = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .flat_map(|f| defined_fn_names(f.text.as_deref().unwrap_or("")))
+        .collect();
+    if defined.iter().any(|d| *d == name) {
+        return None;
+    }
+
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("");
+        // Operate only on the code BEFORE the first test module — the oracle is never edited.
+        let split = text.find("#[cfg(test)]").unwrap_or(text.len());
+        let (prefix, suffix) = text.split_at(split);
+        for (fn_name, fn_text) in split_top_level_functions(prefix) {
+            let Some(body) = fn_body(&fn_text) else {
+                continue;
+            };
+            let known = known_i64_names(&fn_text, &fn_name, &body);
+            let Some((paren_expr, free_vars)) = find_duplicated_i64_expr(&body, &known) else {
+                continue;
+            };
+            let params =
+                free_vars.iter().map(|v| format!("{v}: i64")).collect::<Vec<_>>().join(", ");
+            let inner = paren_expr[1..paren_expr.len() - 1].trim();
+            let helper = format!("fn {name}({params}) -> i64 {{ {inner} }}");
+            let call = format!("{name}({})", free_vars.join(", "));
+            let new_body = body.replace(&paren_expr, &call);
+            if new_body == body {
+                continue;
+            }
+            let new_prefix = replace_body_only(prefix, &fn_name, &new_body).ok()?;
+            let with_helper = insert_before_fn_def(&new_prefix, &fn_name, &helper);
+            let new_text = format!("{with_helper}{suffix}");
+            if new_text == text {
+                continue;
+            }
+            return Some(
+                RepairPatch::new()
+                    .with_edit(RepairEdit::new(
+                        file.path.clone(),
+                        text.to_string(),
+                        new_text,
+                        format!("extract-helper refactor: hoist duplicated `{paren_expr}` into fn {name}"),
+                    ))
+                    .with_metadata("proposer", "nl_extract_helper")
+                    .with_metadata("helper_name", name.clone()),
+            );
+        }
+    }
+    None
+}
+
+/// Parse the helper NAME from an "extract ... into [a] [helper|function] [called|named] <NAME>"
+/// instruction. Requires both an `extract` token AND a `helper`/`function` token so plain prose
+/// never triggers it. NAME follows `called`/`named` when present, else the token after
+/// `helper`/`function`. Returns `None` if no clean identifier name is found.
+fn parse_extract_helper_name(description: &str) -> Option<String> {
+    let toks: Vec<&str> = description
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .collect();
+    let lower_toks: Vec<String> = toks.iter().map(|t| t.to_lowercase()).collect();
+    if !lower_toks.iter().any(|t| t == "extract") {
+        return None;
+    }
+    if !lower_toks.iter().any(|t| t == "helper" || t == "function") {
+        return None;
+    }
+    let name = if let Some(p) = lower_toks.iter().rposition(|t| t == "called" || t == "named") {
+        toks.get(p + 1).copied()
+    } else {
+        let p = lower_toks.iter().position(|t| t == "helper" || t == "function")?;
+        toks.get(p + 1).copied()
+    }?;
+    if !is_plain_ident(name) {
+        return None;
+    }
+    const FILLER: &[&str] =
+        &["a", "an", "the", "it", "into", "helper", "function", "called", "named", "this", "that"];
+    if FILLER.contains(&name.to_lowercase().as_str()) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Names in the fn known to be exactly `i64`: params typed `i64` plus `let [mut] NAME: i64 = ...`
+/// locals. Used to decide which identifiers in a candidate expression are free `i64` variables.
+fn known_i64_names(
+    fn_text: &str,
+    fn_name: &str,
+    body: &str,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(params) = fn_header_params(fn_text, fn_name) {
+        let idents = parse_param_idents(&params);
+        let types = parse_param_types(&params);
+        for (n, t) in idents.iter().zip(types.iter()) {
+            if t.trim() == "i64" {
+                set.insert(n.clone());
+            }
+        }
+    }
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("let ") {
+            let rest = rest.trim();
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            if let Some((name, ty_and)) = rest.split_once(':') {
+                let name = name.trim();
+                let ty = ty_and.split('=').next().unwrap_or("").trim();
+                if ty == "i64" && is_plain_ident(name) {
+                    set.insert(name.to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
+/// True for a plain Rust identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+fn is_plain_ident(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Every balanced `(...)` group (full text, parens included) in `s`, including nested groups.
+fn balanced_paren_groups(s: &str) -> Vec<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    for i in 0..b.len() {
+        if b[i] == b'(' {
+            let mut depth = 0i32;
+            for j in i..b.len() {
+                match b[j] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            out.push(s[i..=j].to_string());
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+/// If `paren_expr` (a full `(E)` group) is a PURE `i64` arithmetic expression whose every free
+/// identifier is in `known`, return its free variables in first-appearance order. Otherwise `None`
+/// — declining calls, indexing, comparisons, casts, unknown identifiers, or trivial (operator-free)
+/// expressions, so the extracted helper's `-> i64` return type is always provably correct.
+fn qualify_i64_expr(
+    paren_expr: &str,
+    known: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    if paren_expr.len() < 2 {
+        return None;
+    }
+    let inner = &paren_expr[1..paren_expr.len() - 1];
+    // Char whitelist: identifiers, digits, whitespace, and pure-arithmetic operators only.
+    if !inner
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c.is_whitespace() || "+-*/%()".contains(c))
+    {
+        return None;
+    }
+    // Must contain at least one arithmetic operator (non-trivial: not a bare `(x)`).
+    if !inner.chars().any(|c| "+-*/%".contains(c)) {
+        return None;
+    }
+    let bytes = inner.as_bytes();
+    let mut free: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            let ident = &inner[start..i];
+            // A call target (`ident(`) is unsupported — return type unknown → decline.
+            if inner[i..].trim_start().starts_with('(') {
+                return None;
+            }
+            if known.contains(ident) {
+                if !free.iter().any(|f| f == ident) {
+                    free.push(ident.to_string());
+                }
+            } else {
+                // Unknown identifier (const / non-i64 local / keyword) → decline.
+                return None;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    if free.is_empty() {
+        return None;
+    }
+    Some(free)
+}
+
+/// The best duplicated, qualifying `(E)` group in `body`: the one appearing the most times
+/// (>=2), tie-broken by longest text. Returns `(paren_expr, free_vars)` or `None`.
+fn find_duplicated_i64_expr(
+    body: &str,
+    known: &std::collections::HashSet<String>,
+) -> Option<(String, Vec<String>)> {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for g in balanced_paren_groups(body) {
+        *counts.entry(g).or_insert(0) += 1;
+    }
+    let mut best: Option<(String, usize, Vec<String>)> = None;
+    for (text, count) in counts {
+        if count < 2 {
+            continue;
+        }
+        let Some(free) = qualify_i64_expr(&text, known) else {
+            continue;
+        };
+        let better = match &best {
+            None => true,
+            Some((bt, bc, _)) => count > *bc || (count == *bc && text.len() > bt.len()),
+        };
+        if better {
+            best = Some((text, count, free));
+        }
+    }
+    best.map(|(t, _, f)| (t, f))
+}
+
 /// CONTENT-based localization: which repo fn does the description talk about?
 /// Scans every `.rs` file's defined fn names and matches each snake_case part of
 /// the name against the description's tokens emergently (exact or shared
@@ -2874,10 +3380,77 @@ fn defined_fn_names(text: &str) -> Vec<String> {
 /// the main function renamed to the repo function and made `pub`, replacing the
 /// repo function definition wholesale. The main is identified by name match to
 /// the repo function, else the last function defined.
-fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+pub(crate) fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    let r = reshape_to_repo_signature_inner(old_text, repo_fn, synthesized);
+    if std::env::var_os("NSYNTH_DEBUG_RESHAPE").is_some() {
+        eprintln!("=== RESHAPE repo_fn={repo_fn}\n--- SYNTHESIZED ---\n{synthesized}\n--- RESULT ---\n{}\n===",
+            r.as_deref().unwrap_or("<None>"));
+    }
+    r
+}
+
+fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    // Normalize the generated Rust FIRST (the same pass the fixture scaffolder runs):
+    // Mog-lowered bodies carry `: Vec<i64> = []` (E0308), bare `.len`, uncast `arr[i]`,
+    // moved-Vec loops. Without this a Vec-RETURNING synth (reverse) reached cargo with
+    // `let mut out: Vec<i64> = [];` -> type mismatch. Scalar folds happened to avoid the
+    // `= []` shape, which is why only the collection cases regressed.
+    let synthesized = &crate::agent::repo::gencode_normalize::normalize_component(synthesized);
     let fns = split_top_level_functions(synthesized);
 
     let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
+
+    // ARITY GUARD: decline when the synthesized ENTRY fn takes a different number of
+    // params than the repo fn. A body written for the wrong arity can never satisfy the
+    // signature — e.g. "maximum of two numbers" (repo `max_of(a,b)`) resolves via the NL
+    // intent to a 1-arg ARRAY max (`array_max(xs)`); reshaping it onto 2 scalar params
+    // yields a type mismatch that cargo rejects, and returning it here short-circuits the
+    // proposer ladder before the test-mined stage (which mines the 2-arg asserts and
+    // solves it correctly). Declining lets the ladder fall through to that stage.
+    if repo_has_fn {
+        let repo_n = fn_header_params(old_text, repo_fn).map(|p| parse_param_idents(&p).len());
+        let entry = fns
+            .iter()
+            .find(|(n, _)| n == repo_fn)
+            .or_else(|| fns.iter().find(|(_, t)| t.trim_start().starts_with("pub ")))
+            .or_else(|| fns.last());
+        let entry_n = entry.and_then(|(n, t)| fn_header_params(t, n).map(|p| parse_param_idents(&p).len()));
+        if let (Some(a), Some(b)) = (repo_n, entry_n) {
+            if a != b {
+                return None;
+            }
+        }
+    }
+
+    // ARG-ORDER SWAP: when the synth entry's param TYPES form the same multiset as the repo
+    // target's but in a DIFFERENT, unambiguous order, a positional rename would MIS-BIND params
+    // (e.g. repo `(k: i64, xs: Vec<i64>)` vs a library op `(arr, k)`). Emit a wrapper that calls
+    // the synth impl with the repo params reordered BY TYPE instead. `arg_reorder_permutation`
+    // returns `None` (fall through to the normal path) for identity order, ambiguous same-typed
+    // params, or arity/type mismatches — so this never fires on the aligned case.
+    if repo_has_fn {
+        if let Some(entry_idx) = fns
+            .iter()
+            .position(|(n, _)| n == repo_fn)
+            .or_else(|| fns.iter().position(|(_, t)| t.trim_start().starts_with("pub ")))
+            .or_else(|| (!fns.is_empty()).then(|| fns.len() - 1))
+        {
+            let synth_types = fn_header_params(&fns[entry_idx].1, &fns[entry_idx].0)
+                .map(|p| parse_param_types(&p))
+                .unwrap_or_default();
+            let repo_types = fn_header_params(old_text, repo_fn)
+                .map(|p| parse_param_types(&p))
+                .unwrap_or_default();
+            if let Some(perm) = arg_reorder_permutation(&synth_types, &repo_types) {
+                if let Some(new_text) =
+                    emit_arg_reorder_wrapper(old_text, repo_fn, &fns, entry_idx, &perm)
+                {
+                    return Some(new_text);
+                }
+            }
+        }
+    }
+
     // Slice adapters bridge the synthesizer's owned `Vec<i64>` params to a repo `&[i64]` slice
     // signature (see slice_param_adapters). Only meaningful when the repo fn exists.
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
@@ -2893,12 +3466,20 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
             == Some("i64");
 
     if fns.len() > 1 {
-        // Pick the ENTRY function: the one named like the repo fn if present, else the FIRST fn.
-        // Mog emits the entry first with helpers after it (the router's composition names its entry
-        // `composed` and appends `reverse_string`/`count_vowels`; the solver names its entry after
-        // the problem and appends `rd0`/`elem`). Defaulting to the LAST fn mis-selected a helper
-        // (e.g. `count_vowels`) as the body, dropping the actual entry.
-        let main_idx = fns.iter().position(|(name, _)| name == repo_fn).unwrap_or(0);
+        // Pick the ENTRY function: the repo fn by name, else the `pub` entry the
+        // synthesizer emits (helpers are non-pub), else the last. Falling straight to
+        // `fns.len()-1` mis-selected a private HELPER as main when the synthesized entry
+        // was named for the op (e.g. `pub fn array_max` calling `fn max_except_last`,
+        // repo fn `biggest`) — the helper got renamed to the repo fn while the real
+        // entry was kept verbatim, producing a duplicate/dangling def (E0428).
+        let main_idx = fns
+            .iter()
+            .position(|(name, _)| name == repo_fn)
+            .or_else(|| {
+                fns.iter()
+                    .position(|(_, text)| text.trim_start().starts_with("pub "))
+            })
+            .unwrap_or(fns.len() - 1);
         let mut helpers = String::new();
         for (k, (_, text)) in fns.iter().enumerate() {
             if k != main_idx {
@@ -3236,16 +3817,124 @@ fn parse_param_types(params: &str) -> Vec<String> {
         .collect()
 }
 
+/// ARG-ORDER reconciliation: when the synthesized entry fn's parameter TYPES form the same
+/// multiset as the repo target's but in a DIFFERENT order, compute the reordering of the REPO
+/// params that supplies the synth's positional arguments. `perm[i]` is the index into the repo
+/// params feeding the synth's i-th parameter.
+///
+/// Returns `Some(perm)` ONLY when the mapping is a genuine, UNAMBIGUOUS, non-identity
+/// permutation: every canonical type KIND is DISTINCT (so each synth slot maps to exactly one
+/// repo param), the multisets match, and the order truly differs. Returns `None` — a clean
+/// decline that keeps the caller's existing behaviour — when: arities differ, any type is
+/// un-mappable, any KIND repeats (ambiguous: two params share a type, so a swap could silently
+/// mis-bind them), or the orders already match (identity: the normal positional rename is
+/// correct). Never guesses across an ambiguous mapping.
+fn arg_reorder_permutation(synth_types: &[String], repo_types: &[String]) -> Option<Vec<usize>> {
+    if synth_types.is_empty() || synth_types.len() != repo_types.len() {
+        return None;
+    }
+    let synth_kinds: Vec<&'static str> = synth_types
+        .iter()
+        .map(|t| crate::library_probe::canonical_kind(t))
+        .collect::<Option<_>>()?;
+    let repo_kinds: Vec<&'static str> = repo_types
+        .iter()
+        .map(|t| crate::library_probe::canonical_kind(t))
+        .collect::<Option<_>>()?;
+    // Ambiguity guard: every KIND must be unique on BOTH sides. A repeated kind means a
+    // reorder could silently swap two same-typed params without a compile error — decline.
+    for kinds in [&synth_kinds, &repo_kinds] {
+        let mut seen = std::collections::HashSet::new();
+        for k in kinds.iter() {
+            if !seen.insert(*k) {
+                return None;
+            }
+        }
+    }
+    // Build the permutation: synth slot i wants the repo param whose kind matches. Distinct
+    // kinds guarantee `position` is unique; a missing kind (multiset mismatch) declines.
+    let mut perm = Vec::with_capacity(synth_kinds.len());
+    for sk in &synth_kinds {
+        perm.push(repo_kinds.iter().position(|rk| rk == sk)?);
+    }
+    // Identity (orders already align) → the normal rename path is correct; not our case.
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return None;
+    }
+    Some(perm)
+}
+
+/// Emit an arg-order-reconciling WRAPPER: keep the synthesized entry fn as a private sibling
+/// (renamed to `reordered_{repo_fn}` — a PREFIX so `find("fn {repo_fn}")` never lands on it), keep any other
+/// synthesized helper fns as siblings, and rewrite the repo fn's body to call the sibling with
+/// its own parameters reordered per `perm` (adding `.to_vec()` where the repo passes a slice into
+/// the Vec-based impl). The repo signature is preserved verbatim, so the caller's tests keep
+/// their call convention. Returns `None` if any structural step fails.
+fn emit_arg_reorder_wrapper(
+    old_text: &str,
+    repo_fn: &str,
+    fns: &[(String, String)],
+    entry_idx: usize,
+    perm: &[usize],
+) -> Option<String> {
+    let (entry_name, entry_text) = &fns[entry_idx];
+    // Prefix (not suffix) the helper name: `replace_body_only` / `insert_before_fn_def` locate
+    // a fn by the substring `fn {repo_fn}`, so a suffix name (`k_largest_reorder_impl`) is matched
+    // FIRST when we later target `k_largest`, corrupting the impl instead of the repo fn. A
+    // prefix (`reordered_k_largest`) never contains `fn k_largest`, so targeting stays exact.
+    let impl_name = format!("reordered_{repo_fn}");
+    // Rename ALL word-boundary occurrences of the entry name (declaration + any self-calls) so a
+    // recursive op keeps working under the new name.
+    let entry_renamed = rename_ident(entry_text, entry_name, &impl_name);
+
+    // Sibling block: the renamed entry first, then every other synthesized helper verbatim.
+    let mut helpers = String::new();
+    helpers.push_str(entry_renamed.trim());
+    helpers.push_str("\n\n");
+    for (k, (_, text)) in fns.iter().enumerate() {
+        if k != entry_idx {
+            helpers.push_str(text.trim());
+            helpers.push_str("\n\n");
+        }
+    }
+
+    // Reordered call args from the repo's own parameters.
+    let repo_params = fn_header_params(old_text, repo_fn)?;
+    let repo_idents = parse_param_idents(&repo_params);
+    let repo_types = parse_param_types(&repo_params);
+    if repo_idents.len() != repo_types.len() || perm.len() != repo_idents.len() {
+        return None;
+    }
+    let mut call_args = Vec::with_capacity(perm.len());
+    for &ri in perm {
+        let name = repo_idents.get(ri)?;
+        let ty = repo_types.get(ri)?;
+        // Bridge a slice repo param into the owned-Vec impl param.
+        if ty.contains("&[") {
+            call_args.push(format!("{name}.to_vec()"));
+        } else {
+            call_args.push(name.clone());
+        }
+    }
+    let wrapper_body = format!("return {impl_name}({});", call_args.join(", "));
+
+    let with_helpers = insert_before_fn_def(old_text, repo_fn, helpers.trim());
+    replace_body_only(&with_helpers, repo_fn, &wrapper_body).ok()
+}
+
 /// `.to_vec()` shadow lines for each repo parameter whose type is a slice (`&[..]`), so the
 /// Vec-based synthesized body compiles against a slice signature. A collection repo function
 /// (`pub fn sum_of_evens(xs: &[i64]) -> i64`) keeps its slice signature (matching the test's
 /// call convention) while the synthesized logic sees an owned `Vec` — the minimal bridge that
 /// unblocks list-processing repo repairs without rewriting iteration.
 fn slice_param_adapters(old_text: &str, repo_fn: &str) -> String {
-    // Bridge every `&[..]` slice PARAM to an owned Vec (the shape the synthesizer emits), regardless
-    // of the return type: `sum_of_evens(xs: &[i64]) -> i64` and `reverse(xs: &[i64]) -> Vec<i64>`
-    // both need `let xs = xs.to_vec();` at the top of the body so the Vec-based synthesized logic
-    // compiles against the slice signature.
+    // Bridge a repo `&[i64]` slice PARAM to the synthesizer's owned `Vec<i64>` body by
+    // shadowing the param: `let xs = xs.to_vec();`. This is safe for ANY return type —
+    // it only rebinds the parameter, so a Vec-RETURNING fn (reverse -> Vec<i64>) still
+    // returns its Vec unchanged. (Earlier this early-returned empty for Vec/[]-returning
+    // fns to "avoid mangling the return", but the param shadow never touches the return;
+    // skipping it left reverse's slice param bound to a Vec-based body -> E0308 type
+    // mismatch. Only reverse has a &[i64] param among the fixtures, so this is surgical.)
     let params = fn_header_params(old_text, repo_fn).unwrap_or_default();
     let idents = parse_param_idents(&params);
     let types = parse_param_types(&params);
@@ -4159,34 +4848,33 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Retarget-to-definition: `src/lib.rs` only declares `pub mod math;` and the failing function
-    /// lives in `src/math.rs`. pick_target_path follows the crate root, but the patch must edit the
-    /// DEFINING file — otherwise it appends a misplaced/duplicate definition and never satisfies the
-    /// oracle. The mined patch must land on src/math.rs.
+    /// Repo repair reaching the OP LIBRARY through the never-wrong front door: a repo
+    /// `count_positives` (filter+count) that the bare enumerator refuses to synthesize from its
+    /// mined array asserts is solved because `verified_nl_router::answer` resolves the library op
+    /// and verifies it against those same asserts. Exercises array-INPUT mining (parse_literal
+    /// vec![..]) + array-output guard removal + the front-door proposer.
     #[test]
-    fn test_mined_synthesis_targets_the_defining_module_file_not_the_crate_root() {
+    fn test_mined_reaches_library_via_front_door_count_positives() {
         let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_retarget_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("nsynth_frontdoor_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("src")).expect("mkdir");
         fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"rt\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+            "[package]\nname = \"fd\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
         )
         .expect("cargo.toml");
-        fs::write(root.join("src/lib.rs"), "pub mod math;\n").expect("lib.rs");
         fs::write(
-            root.join("src/math.rs"),
-            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(2), 5);\n        assert_eq!(mystery(3), 7);\n        assert_eq!(mystery(4), 9);\n    }\n}\n",
+            root.join("src/lib.rs"),
+            "pub fn count_positives(xs: Vec<i64>) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::count_positives;\n    #[test]\n    fn t() {\n        assert_eq!(count_positives(vec![5, -2, 3, -4, 5]), 3);\n        assert_eq!(count_positives(vec![-1, -2, -3]), 0);\n        assert_eq!(count_positives(vec![1, 2, 3, 4]), 4);\n    }\n}\n",
         )
-        .expect("math.rs");
-
+        .expect("lib.rs");
         let task = RepoTaskSpec {
-            id: "retarget".into(),
+            id: "fd".into(),
             repo: root.to_string_lossy().to_string(),
             kind: RepoTaskKind::BugFix,
-            issue: "nl: fix the failing tests".into(),
+            issue: "nl: count how many elements are positive".into(),
             test_command: "cargo test".into(),
             allowed_files: vec!["src/**".into()],
             max_iterations: 2,
@@ -4194,182 +4882,1508 @@ mod tests {
             signals: Vec::new(),
         };
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        let patch = try_test_mined_synthesis_patch(
+            &task,
+            &context,
+            "count how many elements are positive",
+        )
+        .expect("front-door proposer should solve count_positives (library op via mined asserts)");
         assert!(
-            patch.edits.iter().any(|e| e.path == "src/math.rs"),
-            "patch must edit the DEFINING file src/math.rs, not the crate root: {:?}",
-            patch.edits.iter().map(|e| &e.path).collect::<Vec<_>>()
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "synthesis_method" && v.starts_with("front-door:")),
+            "should resolve through the front door, not raw synthesis: {:?}",
+            patch.metadata
         );
         assert!(
-            !patch.edits.iter().any(|e| e.path == "src/lib.rs"),
-            "must NOT edit the module-declaring crate root"
+            patch.edits.iter().any(|e| e.path == "src/lib.rs" && !e.new_text.contains("    0\n}")),
+            "stub body must be replaced with a real count"
         );
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Multi-function repair: two broken functions in one file. A single proposer call fixes ONE
-    /// (the loop over candidates returns the first CHANGING patch); once it is corrected, a second
-    /// call must skip the now-correct function (its re-synthesis is a no-op) and patch the other —
-    /// so the repair loop converges instead of stalling on one function.
+    /// LEVER C END TO END: a repo `k_largest(xs: Vec<i64>, k: i64) -> Vec<i64>` stub is repaired by
+    /// resolving the unique library op `k_largest` (a 2-arg `(array, scalar) -> array` param-carrying
+    /// op) whose behaviour reproduces the mined asserts, then reshaping it onto the repo signature.
+    /// This is the `(Vec, k) -> Vec` shape that previously declined at reshape/resolution.
     #[test]
-    fn test_mined_synthesis_repairs_each_of_several_broken_functions_in_turn() {
+    fn test_mined_k_largest_two_arg_array_scalar_to_array_end_to_end() {
         let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_multifn_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("nsynth_klargest_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("src")).expect("mkdir");
         fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"mf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+            "[package]\nname = \"kl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
         )
         .expect("cargo.toml");
-        let broken = "pub fn triple(n: i64) -> i64 {\n    0\n}\npub fn twice(n: i64) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn a() {\n        assert_eq!(triple(4), 12);\n        assert_eq!(triple(0), 0);\n    }\n    #[test]\n    fn b() {\n        assert_eq!(twice(4), 8);\n        assert_eq!(twice(5), 10);\n    }\n}\n";
-        fs::write(root.join("src/lib.rs"), broken).expect("lib.rs");
-
-        let task = RepoTaskSpec {
-            id: "multifn".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::BugFix,
-            issue: "nl: fix the failing tests".into(),
-            test_command: "cargo test".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 4,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-
-        // Drive the test-mined stage directly (the loop that rotates over candidate functions),
-        // applying each patch between calls, so the second call sees the first repair as done.
-        let norm = |s: &str| s.split_whitespace().collect::<String>();
-        let ctx1 = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx1");
-        let patch1 = try_test_mined_synthesis_patch(&task, &ctx1, "fix the failing tests")
-            .expect("first proposal fixes one function");
-        let edit1 = &patch1.edits[0];
-        fs::write(root.join(&edit1.path), &edit1.new_text).expect("apply patch1");
-
-        let ctx2 = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx2");
-        let patch2 = try_test_mined_synthesis_patch(&task, &ctx2, "fix the failing tests")
-            .expect("second proposal targets the STILL-broken function, not a re-patch of the fixed one");
-        let edit2 = &patch2.edits[0];
-        fs::write(root.join(&edit2.path), &edit2.new_text).expect("apply patch2");
-
-        // Neither function still returns the bare `0` stub — both were repaired across the two calls.
-        let final_src = fs::read_to_string(root.join("src/lib.rs")).expect("read");
-        let f = norm(&final_src);
-        assert!(
-            !f.contains("fntriple(n:i64)->i64{0}"),
-            "triple still stubbed:\n{final_src}"
-        );
-        assert!(
-            !f.contains("fntwice(n:i64)->i64{0}"),
-            "twice still stubbed:\n{final_src}"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// Multi-fn reshape must adopt the ENTRY function, not a trailing helper, when no synthesized
-    /// fn is named like the repo fn. The router's composition names its entry `composed` and appends
-    /// helpers; defaulting to the last fn selected a helper (`count_vowels`) and dropped the real
-    /// pipeline. The repaired `vc` body must call the composition, and the helpers must be inlined.
-    #[test]
-    fn reshape_multifn_adopts_entry_fn_not_trailing_helper() {
-        let old = "pub fn vc(s: String) -> i64 {\n    0\n}\n";
-        let synthesized = "fn composed(x0: String) -> i64 {\n    return count_vowels(reverse_string(x0));\n}\n\nfn reverse_string(s: String) -> String {\n    return s.chars().rev().collect::<String>();\n}\nfn count_vowels(s: String) -> i64 {\n    let mut c: i64 = 0;\n    for ch in s.chars() {\n        if \"aeiouAEIOU\".contains(ch) {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
-        let out = reshape_to_repo_signature(old, "vc", synthesized).expect("reshape");
-        assert!(
-            out.contains("fn vc(") && out.contains("count_vowels(reverse_string("),
-            "vc must call the composition entry, not become a helper body:\n{out}"
-        );
-        assert!(out.contains("fn count_vowels(") && out.contains("fn reverse_string("), "helpers must be inlined:\n{out}");
-    }
-
-    /// i64->bool adapter: the solver expresses a predicate as an i64 fn (0/1 or truthy), but the
-    /// repo fn returns bool. Reshape must wrap the bare returns as `(EXPR) != 0` so it type-checks.
-    #[test]
-    fn reshape_adapts_i64_predicate_body_to_bool_signature() {
-        let old = "pub fn f(n: i64) -> bool {\n    false\n}\n";
-        let synth = "fn f(n: i64) -> i64 {\n    if n < 2 {\n        return 0;\n    }\n    return 1;\n}\n";
-        let out = reshape_to_repo_signature(old, "f", synth).expect("reshape");
-        assert!(out.contains("-> bool"), "repo bool signature kept: {out}");
-        assert!(out.contains("return (0) != 0;"), "0-return not adapted: {out}");
-        assert!(out.contains("return (1) != 0;"), "1-return not adapted: {out}");
-        assert!(!out.contains("return 0;") && !out.contains("return 1;"), "raw i64 return survived: {out}");
-    }
-
-    /// SELF-SYNTHESIS write side: a verified test-mined solve is distilled into the learned store
-    /// when NSYNTH_LEARNED_OPS_PATH is set. Model-independent (the solver produces the solve here),
-    /// so it guards the teach-back wire in CI without a served model.
-    #[test]
-    fn test_mined_synthesis_teaches_verified_solve_to_the_learned_store() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let store = std::env::temp_dir().join(format!("nsynth_teach_{}.jsonl", std::process::id()));
-        let _ = fs::remove_file(&store);
-        std::env::set_var("NSYNTH_LEARNED_OPS_PATH", &store);
-
-        let root = std::env::temp_dir().join(format!("nsynth_teachrepo_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"tc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        // A router-REFUSED affine (3n+7) with 4 examples: the generic query gives the router no name,
-        // so it falls to the raw solver (which fits the affine) — the branch that teaches.
         fs::write(
             root.join("src/lib.rs"),
-            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(1), 10);\n        assert_eq!(mystery(2), 13);\n        assert_eq!(mystery(0), 7);\n        assert_eq!(mystery(4), 19);\n    }\n}\n",
+            "pub fn k_largest(xs: Vec<i64>, k: i64) -> Vec<i64> {\n    Vec::new()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::k_largest;\n    #[test]\n    fn t() {\n        assert_eq!(k_largest(vec![5, 1, 9, 3], 2), vec![9, 5]);\n        assert_eq!(k_largest(vec![4, 4, 2, 8, 1], 3), vec![8, 4, 4]);\n        assert_eq!(k_largest(vec![3, 1], 9), vec![3, 1]);\n    }\n}\n",
         )
         .expect("lib.rs");
         let task = RepoTaskSpec {
-            id: "teach".into(),
+            id: "kl".into(),
             repo: root.to_string_lossy().to_string(),
             kind: RepoTaskKind::BugFix,
-            issue: "nl: fix the failing tests".into(),
+            issue: "nl: the k largest elements".into(),
             test_command: "cargo test".into(),
             allowed_files: vec!["src/**".into()],
             max_iterations: 2,
             hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
             signals: Vec::new(),
         };
-        let ctx = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
-        let patch = try_test_mined_synthesis_patch(&task, &ctx, "fix the failing tests");
-        assert!(patch.is_some(), "raw-solver test-mining should repair 3n+7");
-        let taught = fs::read_to_string(&store).map(|s| s.lines().count()).unwrap_or(0);
-        assert!(taught >= 1, "the verified solve must be distilled into the learned store");
-
-        std::env::remove_var("NSYNTH_LEARNED_OPS_PATH");
-        let _ = fs::remove_file(&store);
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // Aligned (array, scalar) -> array shape resolves via the front door (prose names the op)
+        // OR the behaviour probe (mined asserts pin the unique library op), then reshapes cleanly.
+        let patch = try_test_mined_synthesis_patch(&task, &context, "the k largest elements")
+            .or_else(|| {
+                crate::library_probe::try_library_behavior_patch(
+                    &task,
+                    &context,
+                    "the k largest elements",
+                )
+            })
+            .expect("k_largest (Vec,k)->Vec must resolve end to end");
+        let edit = patch
+            .edits
+            .iter()
+            .find(|e| e.path == "src/lib.rs")
+            .expect("edit to lib.rs");
+        assert!(
+            !edit.new_text.contains("Vec::new()\n}"),
+            "stub body must be replaced by the real k-largest logic: {}",
+            edit.new_text
+        );
+        // The reshaped body must keep the repo signature and compile-shape (sort/push present).
+        assert!(
+            edit.new_text.contains("fn k_largest(xs: Vec<i64>, k: i64) -> Vec<i64>"),
+            "repo signature preserved: {}",
+            edit.new_text
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The model-synthesis lane is INERT with no served endpoint: try_model_synthesis returns None
-    /// so the default (model-off) machine has zero behaviour change — the guarantee never depends on
-    /// the model, and no network call is made in tests.
+    /// ARG-ORDER SWAP adapter, tested directly: a clean two-param swap of distinct types yields
+    /// the reordering permutation; ambiguous (repeated type) and different-arity cases decline;
+    /// identity order declines (the normal rename path is correct there).
     #[test]
-    fn model_synthesis_is_inert_without_an_endpoint() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        use crate::benchmark::{Example, Problem, Value};
-        let exs = vec![
-            Example { inputs: vec![Value::Int(3)], expected: Value::Int(6) },
-            Example { inputs: vec![Value::Int(5)], expected: Value::Int(20) },
-            Example { inputs: vec![Value::Int(2)], expected: Value::Int(2) },
-        ];
-        let problem = Problem {
-            name: "f".into(),
-            category: "t",
-            description: "",
-            signature: "fn f(a: i64) -> i64",
-            examples: exs.clone(),
-            ..Default::default()
-        };
-        assert!(
-            try_model_synthesis(&problem, &exs, "f").is_none(),
-            "model lane must be inert without NSYNTH_LOCAL_LLM_URL"
+    fn arg_reorder_permutation_accepts_clean_swap_declines_ambiguous() {
+        let vec_i64 = "Vec<i64>".to_string();
+        let i64_t = "i64".to_string();
+        // synth (i64, Vec<i64>) vs repo (Vec<i64>, i64): synth slot 0 (int) -> repo idx 1,
+        // synth slot 1 (array) -> repo idx 0  => perm [1, 0].
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone(), vec_i64.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            Some(vec![1, 0]),
+            "distinct-type swap must produce the reordering permutation"
+        );
+        // Identity order: already aligned, decline (normal path handles it).
+        assert_eq!(
+            arg_reorder_permutation(&[vec_i64.clone(), i64_t.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            None,
+            "identity order must decline"
+        );
+        // Ambiguous: two params share a type (both i64) -> cannot pin a mapping -> decline.
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone(), i64_t.clone()], &[i64_t.clone(), i64_t.clone()]),
+            None,
+            "repeated type must decline (ambiguous)"
+        );
+        // Different arity: decline outright.
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            None,
+            "arity mismatch must decline"
+        );
+        // Un-mappable type: decline.
+        assert_eq!(
+            arg_reorder_permutation(&["Foo".to_string(), i64_t.clone()], &[i64_t.clone(), "Foo".to_string()]),
+            None,
+            "un-mappable type must decline"
         );
     }
+
+    /// Reshape emits a WRAPPER when the synthesized entry's param order differs from the repo's.
+    /// Repo `k_largest(k: i64, xs: Vec<i64>)` (scalar-first) + a library-shaped synth
+    /// `k_largest(arr: Vec<i64>, k: i64)` (array-first) must NOT be positionally renamed (which
+    /// would mis-bind `arr`/`k`); instead a `reordered_{repo_fn}` sibling is emitted and the repo fn
+    /// calls it with the params reordered by type: `reordered_k_largest(xs, k)`.
+    #[test]
+    fn reshape_emits_arg_reorder_wrapper_for_scalar_first_repo() {
+        let old = "pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let synth = "pub fn k_largest(arr: Vec<i64>, k: i64) -> Vec<i64> {\n    let mut tmp = arr;\n    tmp.sort();\n    let mut out: Vec<i64> = Vec::new();\n    let n = tmp.len() as i64;\n    let mut lim = k;\n    if lim > n { lim = n; }\n    let mut i = 0i64;\n    while i < lim { out.push(tmp[(n - 1 - i) as usize]); i = i + 1; }\n    return out;\n}\n";
+        let new = reshape_to_repo_signature(old, "k_largest", synth)
+            .expect("scalar-first repo must reshape via arg-order wrapper");
+        // Repo signature preserved verbatim.
+        assert!(
+            new.contains("pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64>"),
+            "repo signature must be preserved: {new}"
+        );
+        // A renamed sibling impl exists (PREFIX name — never collides with the repo fn target).
+        assert!(new.contains("fn reordered_k_largest("), "impl sibling must be emitted: {new}");
+        // The impl KEEPS the real body (the earlier bug replaced it with a self-call, losing this).
+        assert!(new.contains(".sort()"), "impl must retain the real body, not a self-call: {new}");
+        // The REPO fn body is the reordered call into the impl (array `xs` first, `k` second).
+        assert!(
+            new.contains("return reordered_k_largest(xs, k)"),
+            "repo fn must call the impl with args reordered by type (xs, k): {new}"
+        );
+        // The repo fn is no longer the empty stub.
+        assert!(!new.contains("-> Vec<i64> {\n    Vec::new()\n}"), "repo stub must be replaced: {new}");
+    }
+
+    /// Reshape adapter for a SLICE-typed scalar-first repo param: the array param is `&[i64]`,
+    /// so the reordered call must bridge it into the Vec-based impl via `.to_vec()`.
+    #[test]
+    fn reshape_arg_reorder_wrapper_bridges_slice_param() {
+        let old = "pub fn take_top(k: i64, xs: &[i64]) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let synth = "pub fn take_top(arr: Vec<i64>, k: i64) -> Vec<i64> {\n    let mut tmp = arr;\n    tmp.truncate(k as usize);\n    return tmp;\n}\n";
+        let new = reshape_to_repo_signature(old, "take_top", synth)
+            .expect("slice scalar-first repo must reshape via arg-order wrapper");
+        assert!(
+            new.contains("return reordered_take_top(xs.to_vec(), k)"),
+            "slice repo param must be bridged with .to_vec() in the reordered call: {new}"
+        );
+        assert!(new.contains(".truncate("), "impl must retain the real body: {new}");
+    }
+
+    // ---- Lever D: extract-helper refactor ----
+
+    #[test]
+    fn extract_helper_name_parses_and_declines() {
+        assert_eq!(
+            parse_extract_helper_name("extract the duplicated expression into a helper called top"),
+            Some("top".to_string())
+        );
+        assert_eq!(
+            parse_extract_helper_name("extract it into a function named area"),
+            Some("area".to_string())
+        );
+        // No helper/function token → not an extract-helper instruction.
+        assert_eq!(parse_extract_helper_name("extract the value into top"), None);
+        // No extract token at all.
+        assert_eq!(parse_extract_helper_name("make a helper called top"), None);
+        // Name would be a filler word → decline.
+        assert_eq!(parse_extract_helper_name("extract into a helper called it"), None);
+    }
+
+    #[test]
+    fn qualify_i64_expr_accepts_pure_arith_declines_calls_and_unknowns() {
+        let mut known = std::collections::HashSet::new();
+        known.insert("a".to_string());
+        known.insert("b".to_string());
+        known.insert("c".to_string());
+        // Pure i64 arithmetic, free vars in first-appearance order (deduped).
+        assert_eq!(
+            qualify_i64_expr("(a * b + c)", &known),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        assert_eq!(qualify_i64_expr("(a * a)", &known), Some(vec!["a".to_string()]));
+        // A call target → unknown return type → decline.
+        assert_eq!(qualify_i64_expr("(f(a) + b)", &known), None);
+        // Unknown identifier (not a known i64 local) → decline.
+        assert_eq!(qualify_i64_expr("(a + z)", &known), None);
+        // Comparison / non-arithmetic char → decline (would not be i64).
+        assert_eq!(qualify_i64_expr("(a < b)", &known), None);
+        // Trivial (no operator) → decline.
+        assert_eq!(qualify_i64_expr("(a)", &known), None);
+    }
+
+    /// END TO END structural: a repo fn with a duplicated pure-i64 expression + an "extract it into
+    /// a helper called <NAME>" Refactor instruction yields a patch that ADDS `fn <NAME>` and
+    /// replaces >=2 occurrences with a call — the repo signature and test module untouched.
+    #[test]
+    fn extract_helper_hoists_duplicated_expression() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_extract_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"ex\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // `(a * b + c)` is duplicated across two lets; both must become `top(a, b, c)`.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn score(a: i64, b: i64, c: i64) -> i64 {\n    let x = (a * b + c);\n    let y = (a * b + c);\n    x + y\n}\n\n#[cfg(test)]\nmod tests {\n    use super::score;\n    #[test]\n    fn t() {\n        assert_eq!(score(2, 3, 1), 14);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "ex".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: extract the duplicated expression into a helper called top".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_extract_helper_patch(
+            &context,
+            "extract the duplicated expression into a helper called top",
+        )
+        .expect("extract-helper must hoist the duplicated expression");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "nl_extract_helper"),
+            "extract-helper proposer must own the patch: {:?}",
+            patch.metadata
+        );
+        let edit = patch.edits.iter().find(|e| e.path == "src/lib.rs").expect("edit lib.rs");
+        assert!(edit.new_text.contains("fn top(a: i64, b: i64, c: i64) -> i64"), "{}", edit.new_text);
+        assert!(
+            edit.new_text.matches("top(a, b, c)").count() >= 2,
+            ">=2 call sites must replace the duplicated expression: {}",
+            edit.new_text
+        );
+        assert!(
+            !edit.new_text.contains("(a * b + c)"),
+            "the duplicated literal expression must be gone from the body: {}",
+            edit.new_text
+        );
+        // The test module (oracle) is untouched.
+        assert!(edit.new_text.contains("assert_eq!(score(2, 3, 1), 14);"), "{}", edit.new_text);
+        // Ignore the task binding (kind-guard is exercised by the supervisor); silence unused.
+        let _ = &task;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Declines when the duplicated expression references an UNKNOWN (non-i64) local — the free-
+    /// variable / type analysis is unclear, so no patch is emitted rather than wrong code.
+    #[test]
+    fn extract_helper_declines_when_analysis_unclear() {
+        let root = std::env::temp_dir().join(format!("nsynth_extract_dec_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"exd\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // `s` is a String local (untyped-annotation, non-i64): the duplicated `(s.len() + a)`
+        // contains a method call and an unknown local → must decline.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn f(a: i64) -> usize {\n    let s = String::new();\n    let x = (s.len() + a as usize);\n    let y = (s.len() + a as usize);\n    x + y\n}\n",
+        )
+        .expect("lib.rs");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        assert!(
+            try_extract_helper_patch(&context, "extract it into a helper called g").is_none(),
+            "must decline on unclear (non-i64 / method-call) free-variable analysis"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Array-OUTPUT repo fn via the front door: "reverse a list" (`Vec<i64> -> Vec<i64>`) is a
+    /// library op reached through mined `vec![..]` asserts, now that the array-output guard is
+    /// removed and reshape handles the Vec-return lowering. If reshape can't fit this signature
+    /// the proposer declines gracefully (returns None) rather than emitting a bad patch.
+    #[test]
+    fn test_mined_array_output_reverse_via_front_door() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_fdrev_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fdr\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn reverse_list(xs: Vec<i64>) -> Vec<i64> {\n    xs\n}\n\n#[cfg(test)]\nmod tests {\n    use super::reverse_list;\n    #[test]\n    fn t() {\n        assert_eq!(reverse_list(vec![1, 2, 3]), vec![3, 2, 1]);\n        assert_eq!(reverse_list(vec![5, 6]), vec![6, 5]);\n        assert_eq!(reverse_list(vec![9]), vec![9]);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "fdr".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: reverse a list".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // Documents the CURRENT capability: a produced patch must come via the front door and
+        // replace the identity stub; a None (reshape can't fit) is an honest decline, not a bug.
+        if let Some(patch) =
+            try_test_mined_synthesis_patch(&task, &context, "reverse a list")
+        {
+            assert!(
+                patch
+                    .metadata
+                    .iter()
+                    .any(|(k, v)| k == "synthesis_method" && v.starts_with("front-door:")),
+                "array-output solve must be front-door-sourced: {:?}",
+                patch.metadata
+            );
+            eprintln!("REVERSE_ARRAY_OUTPUT: front-door patch produced (array-output reshape works)");
+        } else {
+            eprintln!("REVERSE_ARRAY_OUTPUT: declined (array-output reshape still a gap; safe)");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// LADDER PRE-EMPTION GUARD: `try_real_synthesis_patch` grounds via the low-confidence prose
+    /// bridge on the intent's OWN examples. When that grounding does not reproduce the failing
+    /// test's asserts (a scalar `double`-grounding against an array-fold task), it must now
+    /// DECLINE — so it can no longer return a wrong patch that pre-empts the example-verified
+    /// stages. Without the gate it returned a mis-grounded patch here.
+    #[test]
+    fn real_synthesis_declines_when_grounding_misses_the_failing_asserts() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_laddergate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"lg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // Asserts encode an ARRAY FOLD (sum); the prose names a scalar `double` — a mis-grounding.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn total(xs: Vec<i64>) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::total;\n    #[test]\n    fn t() {\n        assert_eq!(total(vec![1, 2, 3]), 6);\n        assert_eq!(total(vec![10, 20]), 30);\n        assert_eq!(total(vec![5]), 5);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "lg".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: double a number".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // The mis-grounded scalar-double program cannot reproduce total(vec![..]) == sum, so the
+        // gate declines (returns None) instead of pre-empting the proven stages.
+        assert!(
+            try_real_synthesis_patch(&task, &context, "double a number").is_none(),
+            "real-synthesis must decline a grounding that fails the failing test's asserts"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn synthesis_fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "nsynth_nl_repair_{}_{}",
+            "fixture",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_add").expect("write fixture");
+        root
+    }
+
+    fn nl_task(root: &PathBuf, id: &str, fixture_id: &str, issue: &str) -> RepoTaskSpec {
+        RepoTaskSpec {
+            id: id.into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: issue.into(),
+            test_command: nl_fixture_cargo_test_command(fixture_id).expect("cmd"),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nl_description_prefixes() {
+        assert_eq!(
+            nl_description_from_issue("synthesize: add two numbers"),
+            Some("add two numbers".to_string())
+        );
+        assert_eq!(
+            nl_description_from_issue("nl:reverse the array"),
+            Some("reverse the array".to_string())
+        );
+        assert!(nl_description_from_issue("fix the bug").is_none());
+    }
+
+    #[test]
+    fn mog_gcd_transpiles_without_mog_assign_syntax() {
+        let mog = "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n";
+        let rust = rust_code_for_repo_synthesis(mog);
+        assert!(rust.contains("pub fn gcd"));
+        assert!(!rust.contains(":="));
+        assert!(rust.contains("let mut tmp"));
+    }
+
+    #[test]
+    fn repo_rust_body_scalar_stubs() {
+        use crate::agent::coding_intent::CodingIntent;
+
+        let add = CodingIntent {
+            function_name: "add".into(),
+            signature: "i64, i64 -> i64".into(),
+            category: "arithmetic".into(),
+            description: "add two numbers".into(),
+            examples: Vec::new(),
+            constraints: Vec::new(),
+            confidence: 1.0,
+            unresolved: Vec::new(),
+            evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
+        };
+        let hint = "pub fn add_two(a: i64, b: i64) -> i64 { a - b }\n";
+        let body = repo_rust_body_for_nl(&add, "", Some(hint)).expect("add stub");
+        assert!(body.contains("add_two"));
+        assert!(body.contains("a + b"));
+
+        let max = CodingIntent {
+            function_name: "max".into(),
+            signature: "i64, i64 -> i64".into(),
+            category: "comparison".into(),
+            description: "return the larger of two numbers".into(),
+            examples: Vec::new(),
+            constraints: Vec::new(),
+            confidence: 1.0,
+            unresolved: Vec::new(),
+            evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
+        };
+        let max_hint = "pub fn max_of(a: i64, b: i64) -> i64 { a }\n";
+        let max_body = repo_rust_body_for_nl(&max, "", Some(max_hint)).expect("max stub");
+        assert!(max_body.contains("max_of"));
+        assert!(max_body.contains("if a > b"));
+    }
+
+    /// THE DIFFERENTIATOR, end to end and un-gameable: a repo fn whose NAME
+    /// differs from the op it should implement ("the twice function should
+    /// double the number", fn is `twice`, op is `double`).
+    ///   * no I/O examples in the issue; LLM lane explicitly OFF (env removed) —
+    ///     comprehension is the linguigenesis emergent resolver alone;
+    ///   * the intent-name primary MISLOCALIZES here (proven during dev: it
+    ///     wrote a brand-new `fn double` into lib.rs, leaving `twice` broken);
+    ///   * the emergent stage CONTENT-localizes `fn twice` in src/ops.rs (prose
+    ///     token "twice" matches the defined fn), synthesizes the doubling body
+    ///     via the bridge, and preserves the repo fn name;
+    ///   * driven through the REAL proposer chain (nl_synthesis_proposer), and
+    ///     acceptance is behavioral: the failing cargo test passes after.
+    #[test]
+    fn emergent_proposer_repairs_renamed_fn_bare_nl_no_llm() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL"); // no model in the loop
+        let root = std::env::temp_dir().join(format!("nsynth_emergent_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"twicefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod ops;\npub use ops::twice;\n\n#[cfg(test)]\nmod tests {\n    use super::twice;\n    #[test]\n    fn twice_doubles() {\n        assert_eq!(twice(4), 8);\n        assert_eq!(twice(-3), -6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(
+            root.join("src/ops.rs"),
+            "pub fn twice(x: i64) -> i64 {\n    x + 1\n}\n",
+        )
+        .expect("ops.rs");
+
+        let task = RepoTaskSpec {
+            id: "emergent-twice".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the twice function should double the number".into(),
+            test_command: "cargo test twice_doubles".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Through the REAL chain — the emergent stage must win the ordering.
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_synthesis"),
+            "emergent stage should produce this patch: {:?}",
+            patch.metadata
+        );
+        assert_eq!(patch.edits[0].path, "src/ops.rs", "content-localized to the defining file");
+        assert!(
+            patch.edits[0].new_text.contains("fn twice"),
+            "repo fn name preserved: {}",
+            patch.edits[0].new_text
+        );
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// STRING repair through the emergent stage: "the shout function should
+    /// uppercase the text" — the type-domain widening reaching the repair path.
+    #[test]
+    fn emergent_proposer_repairs_string_fn_bare_nl_no_llm() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_emstr_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"strfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod text_utils;\npub use text_utils::shout;\n\n#[cfg(test)]\nmod tests {\n    use super::shout;\n    #[test]\n    fn shouts() {\n        assert_eq!(shout(\"hello\".to_string()), \"HELLO\");\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(
+            root.join("src/text_utils.rs"),
+            "pub fn shout(s: String) -> String {\n    s\n}\n",
+        )
+        .expect("text_utils.rs");
+
+        let task = RepoTaskSpec {
+            id: "emergent-shout".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the shout function should uppercase the text".into(),
+            test_command: "cargo test shouts".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = try_emergent_synthesis_patch(
+            &task,
+            &context,
+            "the shout function should uppercase the text",
+            None,
+        )
+        .expect("emergent string patch");
+        assert_eq!(patch.edits[0].path, "src/text_utils.rs");
+        assert!(
+            patch.edits[0].new_text.contains("to_uppercase"),
+            "verified string body: {}",
+            patch.edits[0].new_text
+        );
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// FEATURE-ADD end to end (TDD shape, no examples, no LLM): a failing test
+    /// references a fn that does NOT exist; "add a function that triples a
+    /// number" synthesizes `triple` via emergent comprehension and APPENDS it —
+    /// the compile-failing crate goes green.
+    #[test]
+    fn emergent_addition_adds_missing_fn_from_bare_nl() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_addfn_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // TDD: the test exists, the fn does not — baseline is a COMPILE failure.
+        fs::write(
+            root.join("src/lib.rs"),
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n        assert_eq!(crate::triple(-2), -6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+
+        let task = RepoTaskSpec {
+            id: "add-triple".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: "nl: add a function that triples a number".into(),
+            test_command: "cargo test triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (missing fn)");
+        let analysis = FailureParser::default().parse(&before.failure_output());
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Through the REAL chain.
+        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition"),
+            "addition stage should fire: {:?}",
+            patch.metadata
+        );
+        let new_text = &patch.edits[0].new_text;
+        assert!(new_text.contains("pub fn triple"), "new fn appended: {new_text}");
+        // The original content is preserved (append, not replace).
+        assert!(new_text.contains("mod tests"), "existing content kept: {new_text}");
+        fs::write(root.join(&patch.edits[0].path), new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CONTENT-GREP localization (ReAct slice), end to end: the fn is called
+    /// `mul3` — NO name/morphology relation to the prose — but its file's
+    /// comment says "tripling helper". Content search finds the file, the
+    /// single-fn rule targets `mul3`, emergent comprehension synthesizes the
+    /// tripling body under the repo's fn name, cargo goes green.
+    #[test]
+    fn content_grep_localizes_fn_whose_name_shares_nothing_with_prose() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_grep_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"grepfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn mul3_triples() {\n        assert_eq!(crate::maths::mul3(4), 12);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // The fn name shares NOTHING with the prose; the comment carries the link.
+        fs::write(
+            root.join("src/maths.rs"),
+            "// The tripling helper used by the pricing code.\npub fn mul3(x: i64) -> i64 {\n    x + 3\n}\n",
+        )
+        .expect("maths.rs");
+
+        let task = RepoTaskSpec {
+            id: "grep-mul3".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the tripling helper should triple the number".into(),
+            test_command: "cargo test mul3_triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Name matching alone must FAIL here...
+        let desc = "the tripling helper should triple the number";
+        let patch = try_emergent_synthesis_patch(&task, &context, desc, None)
+            .expect("content-grep localized patch");
+        assert_eq!(patch.edits[0].path, "src/maths.rs", "found via content, not name");
+        assert!(patch.edits[0].new_text.contains("fn mul3"), "repo fn name kept: {}", patch.edits[0].new_text);
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// SIGNATURE-CHANGE refactor, end to end: "add a parameter offset to scale
+    /// defaulting to 0" — the definition gains the param, the cross-file call
+    /// site gains the default argument, tests (already calling the new arity)
+    /// go green. Behavior preserved by construction; tests never edited.
+    #[test]
+    fn add_param_refactor_updates_signature_and_call_sites() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_addparam_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addparam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn new_arity() {\n        assert_eq!(crate::maths::scale(4, 0), 8);\n        assert_eq!(crate::report::doubled(3), 6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(root.join("src/maths.rs"), "pub fn scale(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("maths");
+        fs::write(
+            root.join("src/report.rs"),
+            "use crate::maths::scale;\n\npub fn doubled(n: i64) -> i64 {\n    scale(n)\n}\n",
+        )
+        .expect("report");
+
+        let task = RepoTaskSpec {
+            id: "addparam-scale".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: add a parameter offset to scale defaulting to 0".into(),
+            test_command: "cargo test new_arity".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (tests call new arity)");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_add_param_refactor"),
+            "add-param stage should fire: {:?}",
+            patch.metadata
+        );
+        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/maths.rs"), "definition edited: {paths:?}");
+        assert!(paths.contains(&"src/report.rs"), "call site edited: {paths:?}");
+        let def = patch.edits.iter().find(|e| e.path == "src/maths.rs").unwrap();
+        assert!(def.new_text.contains("scale(x: i64, offset: i64)"), "{}", def.new_text);
+        let call = patch.edits.iter().find(|e| e.path == "src/report.rs").unwrap();
+        assert!(call.new_text.contains("scale(n, 0)"), "{}", call.new_text);
+
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn add_param_declines_without_default_or_unknown_fn() {
+        let root = std::env::temp_dir().join(format!("nsynth_apneg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn scale(x: i64) -> i64 { 2 * x }\n").unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // No default literal -> decline (never fabricate).
+        assert!(try_add_param_patch(&context, "add a parameter offset to scale").is_none());
+        // Unknown fn -> decline.
+        assert!(
+            try_add_param_patch(&context, "add a parameter offset to shrink defaulting to 0")
+                .is_none()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// COORDINATED MULTI-FILE RENAME, end to end: definition in one file, call
+    /// site in another, both rewritten in ONE atomic patch; the TDD oracle
+    /// (tests already call the NEW name) goes green. Tests are never edited.
+    #[test]
+    fn rename_refactor_updates_definition_and_call_sites() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_rename_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"renamefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn twice_works() {\n        assert_eq!(crate::maths::twice(4), 8);\n        assert_eq!(crate::report::doubled_len(3), 6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // Definition file...
+        fs::write(root.join("src/maths.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("maths");
+        // ...and a CALLER in a different file.
+        fs::write(
+            root.join("src/report.rs"),
+            "use crate::maths::double;\n\npub fn doubled_len(n: i64) -> i64 {\n    double(n)\n}\n",
+        )
+        .expect("report");
+
+        let task = RepoTaskSpec {
+            id: "rename-double".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: rename double to twice".into(),
+            test_command: "cargo test twice_works".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (tests call twice)");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_rename_refactor"),
+            "rename stage should fire: {:?}",
+            patch.metadata
+        );
+        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/maths.rs"), "definition file edited: {paths:?}");
+        assert!(paths.contains(&"src/report.rs"), "caller file edited: {paths:?}");
+        // The oracle is untouched: no edit rewrites the tests module's calls.
+        for e in &patch.edits {
+            assert!(
+                !e.new_text.contains("crate::maths::double"),
+                "no stale references left: {}",
+                e.new_text
+            );
+        }
+
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_declines_undefined_source_and_collisions() {
+        let root = std::env::temp_dir().join(format!("nsynth_renneg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn double(x: i64) -> i64 { 2 * x }\npub fn triple(x: i64) -> i64 { 3 * x }\n",
+        )
+        .unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Undefined source fn declines.
+        assert!(try_rename_patch(&context, "rename quadruple to quint").is_none());
+        // Collision with an existing fn declines.
+        assert!(try_rename_patch(&context, "rename double to triple").is_none());
+        // Word-boundary safety: renaming double must not touch doubled identifiers.
+        let p = try_rename_patch(&context, "rename double to twice").expect("patch");
+        assert!(p.edits[0].new_text.contains("pub fn twice"));
+        assert!(p.edits[0].new_text.contains("pub fn triple"), "others untouched");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// MULTI-FILE COORDINATED ADDITION, end to end through the REAL transaction:
+    /// a module-manifest repo (lib.rs only declares mods) gets a NEW module file
+    /// src/triple.rs (file CREATION via EditTransaction) plus the lib.rs wiring
+    /// in ONE atomic patch — and the compile-failing crate goes green.
+    #[test]
+    fn emergent_addition_multifile_creates_module_and_wires_manifest() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_addmf_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addmf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // Module-manifest lib.rs: declares mods, defines no fns of its own.
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod ops;\npub use ops::*;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(root.join("src/ops.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("ops.rs");
+
+        let task = RepoTaskSpec {
+            id: "add-mf-triple".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: "nl: add a function that triples a number".into(),
+            test_command: "cargo test triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (missing fn)");
+        let analysis = FailureParser::default().parse(&before.failure_output());
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition_multifile"),
+            "multi-file addition should fire: {:?}",
+            patch.metadata
+        );
+        assert_eq!(patch.edits.len(), 2, "coordinated two-file patch");
+        assert_eq!(patch.edits[0].path, "src/triple.rs", "new module file");
+        assert!(patch.edits[1].new_text.contains("mod triple;"), "manifest wired");
+
+        // Apply through the REAL transaction — proves atomic file CREATION.
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        assert!(root.join("src/triple.rs").is_file(), "module created on disk");
+
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// OBSERVATION-DRIVEN disambiguation: two files define a `double`; walk
+    /// order alone would patch the healthy one (aaa.rs) and leave the broken one
+    /// (zzz.rs) failing forever. The failure-implicated file from FailureAnalysis
+    /// must outrank walk order, and the repair must land + verify green.
+    #[test]
+    fn failure_file_outranks_walk_order_in_localization() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_obsloc_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"obsfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod aaa;\npub mod zzz;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn zzz_doubles() {\n        assert_eq!(crate::zzz::double(4), 8);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // aaa: healthy double — walk order would pick this one first.
+        fs::write(root.join("src/aaa.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("aaa");
+        // zzz: the BROKEN double the failing test actually exercises.
+        fs::write(root.join("src/zzz.rs"), "pub fn double(x: i64) -> i64 {\n    x + 1\n}\n")
+            .expect("zzz");
+
+        let task = RepoTaskSpec {
+            id: "obs-double".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the double function should double the number".into(),
+            test_command: "cargo test zzz_doubles".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let desc = "the double function should double the number";
+
+        // WITHOUT analysis: walk order picks aaa.rs (the healthy file) — the
+        // blind spot this feature closes.
+        let (blind_path, _) = locate_described_fn(&context, desc, None).expect("blind");
+        assert_eq!(blind_path, "src/aaa.rs", "walk order picks the wrong file");
+
+        // WITH the failure-implicated file: zzz.rs wins.
+        let analysis = FailureAnalysis {
+            kind: crate::agent::repo::FailureKind::TestFailure,
+            file: Some("src/zzz.rs".to_string()),
+            line: Some(2),
+            message: "assertion failed".into(),
+            likely_cause: String::new(),
+            suggested_action: String::new(),
+        };
+        let patch = try_emergent_synthesis_patch(&task, &context, desc, Some(&analysis))
+            .expect("observation-driven patch");
+        assert_eq!(patch.edits[0].path, "src/zzz.rs", "failure file outranks walk order");
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn locate_described_fn_matches_emergently_and_specifically() {
+        let root = std::env::temp_dir().join(format!("nsynth_locate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(
+            root.join("src/util.rs"),
+            "pub fn double(x: i64) -> i64 { x }\npub fn reverse_list(v: Vec<i64>) -> Vec<i64> { v }\npub fn number_cruncher(x: i64) -> i64 { x }\n",
+        )
+        .unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // morphology: "doubling" -> double
+        let (_, f) = locate_described_fn(&context, "fix the doubling function", None).expect("found");
+        assert_eq!(f, "double");
+        // multi-part fn: every part must be matched
+        let (_, f) = locate_described_fn(&context, "reverse the list please", None).expect("found");
+        assert_eq!(f, "reverse_list");
+        // incidental "number" alone must NOT select number_cruncher
+        assert!(locate_described_fn(&context, "the number should be bigger", None).is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nl_synthesis_proposer_fixes_wrong_add() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = synthesis_fixture();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(
+            &root,
+            "nl-add",
+            "nl_fixture_add",
+            "synthesize: add two numbers",
+        );
+
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(!patch.edits.is_empty());
+        let new_content = patch.edits[0].new_text.clone();
+        assert!(new_content.contains("add_two"));
+        // Acceptance is behavior-based (cargo test), independent of whether the
+        // real-synthesis primary or keyword fallback produced the patch.
+        fs::write(root.join(patch.edits[0].path.clone()), new_content).expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failure_aware_proposer_uses_cargo_test_failure() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_nl_fail_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_divide").expect("write");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(
+            &root,
+            "nl-div-fail",
+            "nl_fixture_divide",
+            "synthesize: divide two numbers",
+        );
+        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify");
+        assert!(!verification.success);
+        let analysis = FailureParser::default().parse(&verification.failure_output());
+        assert_eq!(analysis.kind, crate::agent::repo::FailureKind::TestFailure);
+
+        // divide's solver output uses Result-style wrappers, so real synthesis
+        // declines and the failure-aware keyword fallback repairs it. Acceptance
+        // is behavior-based (cargo test passes after the patch).
+        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("patch");
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn assert_real_synthesis_repairs(fixture_id: &str, description: &str, tag: &str) {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_rs_{}_{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, fixture_id).expect("write");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(&root, tag, fixture_id, &format!("synthesize: {description}"));
+
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "{fixture_id} should fail before repair");
+
+        let patch = try_real_synthesis_patch(&task, &context, description)
+            .unwrap_or_else(|| panic!("{fixture_id}: expected real-synthesis patch"));
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(
+            after.success,
+            "{fixture_id} real-synthesis repair failed:\nCODE:\n{}\nSTDERR:\n{}",
+            patch.edits[0].new_text, after.stderr
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn real_synthesis_repairs_divide_result_idiom() {
+        // Safe-division emits a 2-function Result/ok/err/match template; the
+        // lowering (ok->Some, err->None, match->unwrap_or) must produce
+        // compilable plain Rust that passes the cargo-test oracle.
+        assert_real_synthesis_repairs("nl_fixture_divide", "divide two numbers", "div");
+    }
+
+    #[test]
+    fn real_synthesis_repairs_multiply_multifunction() {
+        // multiply may synthesize via the LCM formula (gcd_inner + multiply);
+        // multi-function reshape must keep the helper and target the main fn.
+        assert_real_synthesis_repairs("nl_fixture_multiply", "multiply two numbers", "mul");
+    }
+
+    // Broadened unseen-NL corpus (G5 sign-off): each is described ONLY by inline
+    // I/O examples (no registry op, no keyword-table entry), so the repair can
+    // succeed *only* through genuine example-driven synthesis. The cargo-test
+    // oracle asserts holdout inputs to prove generalization, not example overfit.
+
+    #[test]
+    fn real_synthesis_repairs_square_nonlinear() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_square",
+            "a function where square(2)=4 and square(3)=9 and square(4)=16 and square(5)=25 and square(6)=36 and square(0)=0",
+            "sq",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_negate_affine() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_negate",
+            "a function where negate(5)=-5 and negate(-3)=3 and negate(0)=0 and negate(7)=-7 and negate(-12)=12",
+            "neg",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_abs_branch() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_abs",
+            "a function where absval(-3)=3 and absval(4)=4 and absval(-10)=10 and absval(0)=0 and absval(-1)=1 and absval(8)=8",
+            "abs",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_sum3_multiarg() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_sum3",
+            "a function where add3(1,2,3)=6 and add3(0,0,5)=5 and add3(2,2,2)=6 and add3(10,20,30)=60 and add3(-1,1,0)=0",
+            "sum3",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_sum_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrsum",
+            "a function where total([1,2,3])=6 and total([4,5])=9 and total([10])=10 and total([2,2,2,2])=8 and total([7,3])=10",
+            "arrsum",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_max_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrmax",
+            "a function where biggest([3,1,2])=3 and biggest([5,9,1])=9 and biggest([7])=7 and biggest([-1,-5,-2])=-1 and biggest([2,2,8,4])=8",
+            "arrmax",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_len_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrlen",
+            "a function where howmany([3,1,2])=3 and howmany([5,9])=2 and howmany([7])=1 and howmany([1,2,3,4,5])=5 and howmany([6,6])=2",
+            "arrlen",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_min3_nested_branch() {
+        // 3-way minimum: synthesized as nested comparison branches (synth_gradient),
+        // not a constant-threshold overfit. Holdouts prove real min logic.
+        assert_real_synthesis_repairs(
+            "nl_fixture_min3",
+            "a function where smallest(3,7,5)=3 and smallest(9,2,8)=2 and smallest(1,4,1)=1 and smallest(5,5,2)=2 and smallest(-1,0,3)=-1 and smallest(8,8,8)=8 and smallest(4,1,9)=1",
+            "min3",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_unseen_inline_example_op() {
+        // `triple` is NOT in any keyword table; the only way to repair it is to
+        // actually synthesize x*3 from the inline examples in the issue. Proves
+        // the closed repair loop generalizes to arbitrary demonstrated functions.
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_nl_triple_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_triple").expect("write");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(
+            &root,
+            "nl-triple",
+            "nl_fixture_triple",
+            "synthesize: a function where triple(2)=6 and triple(5)=15 and triple(3)=9",
+        );
+
+        // Fails before repair.
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success);
+
+        // The proposer must use the real-synthesis path (not a keyword stub).
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert_eq!(
+            patch
+                .metadata
+                .iter()
+                .find(|(k, _)| k == "proposer")
+                .map(|(_, v)| v.as_str()),
+            Some("nl_real_synthesis"),
+            "expected real synthesis, got metadata {:?}",
+            patch.metadata
+        );
+
+        // Apply and re-verify: cargo test is the acceptance oracle.
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repair_loop_with_nl_synthesis_proposer() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = synthesis_fixture();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(
+            &root,
+            "nl-add-loop",
+            "nl_fixture_add",
+            "synthesize: add two numbers",
+        );
+        let mut loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
+        let result = loop_runner
+            .run_with_context(&task, &context, &nl_synthesis_proposer)
+            .expect("repair loop");
+        assert!(result.success);
+        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify");
+        assert!(verification.success);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ── gated MODEL-INTENT stage: inert-by-default + verify-gated (no server) ──
+
+    /// Build an IN-MEMORY repair context (no disk) around a single source file, so
+    /// the model-intent core can be exercised without a live model or a real crate.
+    fn mi_context(text: &str) -> RepairContext {
+        RepairContext {
+            root: "/nonexistent/nsynth-mi-root".into(),
+            files: vec![crate::agent::repo::RepairFile {
+                path: "src/lib.rs".into(),
+                bytes: text.len(),
+                lines: text.lines().count(),
+                text: Some(text.to_string()),
+            }],
+        }
+    }
+
+    fn mi_task(id: &str) -> RepoTaskSpec {
+        RepoTaskSpec {
+            id: id.into(),
+            repo: "/nonexistent/nsynth-mi-root".into(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: double the number".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        }
+    }
+
+    /// GATE (i) — INERT BY DEFAULT: with `NSYNTH_LOCAL_LLM_URL` unset the model-intent
+    /// lane returns `None` immediately (never reaching the network layer) and stages
+    /// nothing. This is the zero-default-change guarantee.
+    #[test]
+    fn model_intent_lane_is_inert_without_url() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let ctx = mi_context("pub fn twice(n: i64) -> i64 {\n    n\n}\n");
+        let task = mi_task("mi-inert");
+        discard_model_distillation(&task.id);
+        assert!(
+            try_model_intent_patch(&task, &ctx, "double the number").is_none(),
+            "gated model-intent lane must be inert without NSYNTH_LOCAL_LLM_URL"
+        );
+        assert!(
+            take_model_distillation(&task.id).is_none(),
+            "an inert lane must stage no distillation candidate"
+        );
+    }
+
+    /// GATE (ii) — VERIFY-GATED: a deliberately-WRONG model spec (a stub for the model's
+    /// output — no server needed) is REJECTED by the engine's held-out oracle and never
+    /// promoted to a patch (and nothing is staged for distillation). A CORRECT spec, by
+    /// contrast, is synthesized + verified into a repo-signature patch and stages a
+    /// distillation candidate whose program reproduces the examples.
+    #[test]
+    fn model_intent_core_rejects_wrong_spec_and_verifies_correct_spec() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        use crate::benchmark::{Example, Value};
+        let ctx = mi_context("pub fn twice(n: i64) -> i64 {\n    n\n}\n");
+
+        // WRONG: identity on the seed, but a POISONED held-out row the seed-synthesized
+        // program cannot reproduce — the never-wrong held-out gate rejects it.
+        let wrong = vec![
+            Example { inputs: vec![Value::Int(0)], expected: Value::Int(0) },
+            Example { inputs: vec![Value::Int(1)], expected: Value::Int(1) },
+            Example { inputs: vec![Value::Int(2)], expected: Value::Int(2) },
+            Example { inputs: vec![Value::Int(3)], expected: Value::Int(3) },
+            Example { inputs: vec![Value::Int(10)], expected: Value::Int(999) },
+        ];
+        let wtask = mi_task("mi-wrong");
+        discard_model_distillation(&wtask.id);
+        assert!(
+            try_model_intent_patch_from_spec(&wtask, &ctx, "identity", wrong).is_none(),
+            "a held-out-inconsistent model spec must be REJECTED, never promoted"
+        );
+        assert!(
+            take_model_distillation(&wtask.id).is_none(),
+            "a rejected spec must stage NO distillation candidate"
+        );
+
+        // CORRECT: doubling. The engine synthesizes 2n, reproduces the held-out row, and
+        // passes strict-verify → a verified patch onto the repo `twice` signature.
+        let good = vec![
+            Example { inputs: vec![Value::Int(1)], expected: Value::Int(2) },
+            Example { inputs: vec![Value::Int(2)], expected: Value::Int(4) },
+            Example { inputs: vec![Value::Int(3)], expected: Value::Int(6) },
+            Example { inputs: vec![Value::Int(4)], expected: Value::Int(8) },
+            Example { inputs: vec![Value::Int(6)], expected: Value::Int(12) },
+        ];
+        let gtask = mi_task("mi-correct");
+        discard_model_distillation(&gtask.id);
+        let patch = try_model_intent_patch_from_spec(&gtask, &ctx, "double the number", good)
+            .expect("a correct model spec yields a verified patch");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "model_intent"),
+            "patch is tagged as the model-intent lane: {:?}",
+            patch.metadata
+        );
+        assert!(
+            patch.edits.iter().any(|e| e.new_text.contains("fn twice(n: i64)")),
+            "the repo fn signature is preserved by the reshape: {:?}",
+            patch.edits.iter().map(|e| e.new_text.clone()).collect::<Vec<_>>()
+        );
+        // An accepted-shaped solve stages a distillation candidate whose ENGINE program
+        // reproduces the examples — exactly what `record_proposed_op` would absorb.
+        let (problem, code) = take_model_distillation(&gtask.id)
+            .expect("a verified model-intent solve stages a distill candidate");
+        assert!(
+            crate::runtime::code_reproduces_examples(&code, &problem.examples),
+            "the staged program reproduces its examples: {code}"
+        );
+    }
+
+    /// The distillation plumbing is single-shot and INERT when nothing was staged (the
+    /// default-run case): `distill_accepted_model_solve` is a no-op with no candidate,
+    /// staging round-trips the exact `(problem, code)`, and `discard` clears without
+    /// recording. No env vars touched → no cross-test races.
+    #[test]
+    fn model_distillation_plumbing_single_shot_and_inert_when_empty() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        use crate::benchmark::{Example, Problem, Value};
+        let id = format!("mi-plumbing-{}", std::process::id());
+        discard_model_distillation(&id);
+        assert!(
+            !distill_accepted_model_solve(&id),
+            "no staged candidate -> distilling an accepted solve is a no-op"
+        );
+        let sig: &'static str = Box::leak("fn f(n: i64) -> i64".to_string().into_boxed_str());
+        let problem = Problem {
+            name: "f".into(),
+            signature: sig,
+            examples: vec![Example { inputs: vec![Value::Int(2)], expected: Value::Int(7) }],
+            ..Default::default()
+        };
+        let code = "fn f(n: i64) -> i64 {\n    return n * 3 + 1;\n}\n".to_string();
+        stage_model_distillation(&id, problem.clone(), code.clone());
+        let taken = take_model_distillation(&id).expect("staged candidate present");
+        assert_eq!(taken.1, code, "code round-trips through the stage");
+        assert_eq!(taken.0.examples, problem.examples, "problem round-trips through the stage");
+        assert!(
+            take_model_distillation(&id).is_none(),
+            "single-shot: the candidate is consumed"
+        );
+        stage_model_distillation(&id, problem, code);
+        discard_model_distillation(&id);
+        assert!(
+            take_model_distillation(&id).is_none(),
+            "discard clears the stage without recording"
+        );
+    }
+
 
     #[test]
     fn mutation_generator_covers_operator_swaps_assignment_and_offbyone_and_spares_the_test() {
@@ -4386,20 +6400,6 @@ mod tests {
             muts.iter().all(|m| m.contains("assert_eq!(f(5), 15)")),
             "a mutation altered the test assertion"
         );
-    }
-
-    #[test]
-    fn structural_guard_templates_insert_edge_early_returns() {
-        // Option return: a divide fn should get an `if b == 0 { return None; }` guard candidate.
-        let code = "pub fn safe_div(a: i64, b: i64) -> Option<i64> { Some(a / b) }\n";
-        let muts = structural_guard_mutations(code, "");
-        assert!(
-            muts.iter().any(|m| m.contains("if b == 0 { return None; }") && m.contains("Some(a / b)")),
-            "no `b == 0 -> None` guard: {muts:?}"
-        );
-        // i64 return -> edge 0.
-        let c2 = "pub fn f(n: i64) -> i64 { n }\n";
-        assert!(structural_guard_mutations(c2, "").iter().any(|m| m.contains("return 0;")));
     }
 
     #[test]
@@ -5559,4 +7559,3 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 }
-

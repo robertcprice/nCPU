@@ -106,6 +106,15 @@ impl EditTransaction {
         self.committed
     }
 
+    /// Peek at the pending (not-yet-committed) content this transaction would
+    /// write for `relative`. Returns `Ok(None)` if the transaction has not
+    /// touched that path. Used by the repair loop to validate manifest edits
+    /// against the *resulting* file before committing.
+    pub fn working_content(&self, relative: &str) -> Result<Option<String>, String> {
+        let path = self.resolve_relative(relative)?;
+        Ok(self.working.get(&path).cloned())
+    }
+
     fn resolve_relative(&self, relative: &str) -> Result<PathBuf, String> {
         let path = Path::new(relative);
         if path.is_absolute() {

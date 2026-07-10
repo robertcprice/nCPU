@@ -260,13 +260,33 @@ impl CodingAgentSession {
                     // verified. This is general epistemics (no examples ⇒ tentative), not
                     // a per-case rule.
                     let unverified = examples.is_empty();
-                    let tent = |m: String| if unverified { format!("{m}:tentative") } else { m };
+                    let nl = crate::verified_nl_router::split_prompt_examples(query).0;
+                    // ORACLE MANUFACTURING: a bare-NL library/composition match is a GUESS at
+                    // intent → tentative. Confirm it reference-free and EMERGENTLY (no per-op
+                    // spec table): resolve the prompt to the single op whose operation-word
+                    // signature it exactly matches and DIFFERENTIALLY execute the matched program
+                    // against that op's verified reference on fresh inputs. Agreement confirms the
+                    // guess (drop tentative); a mis-resolution / modified / compositional intent
+                    // resolves to no single op or fails the diff and keeps the tentative label.
+                    let label = |base: String, code: &str| -> String {
+                        if !unverified {
+                            return base;
+                        }
+                        let confirmed = crate::site::fn_name_from_mog(code).is_some_and(|e| {
+                            crate::constraint_oracle::confirm_from_prompt(code, &e, &nl)
+                        });
+                        if confirmed {
+                            base
+                        } else {
+                            format!("{base}:tentative")
+                        }
+                    };
                     let (method, code) = match ans {
                         Answer::Library { name, code } => {
-                            (tent(format!("verified-nl-router:library:{name}")), code)
+                            (label(format!("verified-nl-router:library:{name}"), &code), code)
                         }
                         Answer::Composition { code } => {
-                            (tent("verified-nl-router:composition".to_string()), code)
+                            (label("verified-nl-router:composition".to_string(), &code), code)
                         }
                         Answer::Synthesized { method, code } => {
                             (format!("verified-nl-router:synth:{method}"), code)
@@ -276,9 +296,15 @@ impl CodingAgentSession {
                         }
                         Answer::Refused => unreachable!(),
                     };
+                    // HONESTY (defect C): a bare-NL match whose intent could NOT be confirmed is
+                    // labelled `:tentative` — it is a name-grounded GUESS, not a verified solve.
+                    // `success` must reflect that: a tentative answer is NOT a confident success
+                    // (so the CLI never prints `success: true` over a wrong-count composition).
+                    // The code + honest tentative label are still returned for the user to inspect.
+                    let confident = !method.contains(":tentative");
                     let result = AgentQueryResult {
                         route: QueryRoute::SynthesizeFunction,
-                        success: true,
+                        success: confident,
                         response: code,
                         workflow: "synthesize_function".to_string(),
                         clarification_questions: Vec::new(),
@@ -1127,8 +1153,22 @@ impl CodingAgentSession {
         // it is always false on this path today, but keeps the rule correct if a
         // future caller reaches run_synthesis with real examples.
         let user_oracle = !crate::verified_nl_router::split_prompt_examples(query).1.is_empty();
+        // ORACLE MANUFACTURING (synthesis tier): even with no USER oracle, if the prompt names
+        // EXACTLY one op (emergently — token grounding + completeness gate), confirm the
+        // untrusted synthesized program DIFFERENTIALLY against that op's verified reference on
+        // many fresh inputs. Agreement everywhere means it computes that operation, so the guess
+        // at intent is CONFIRMED reference-free. A wrong synthesis (e.g. "average" mis-built, or
+        // a bad max combinator) disagrees on a fresh input and stays tentative. Never-wrong-safe:
+        // the reference is a proven impl and the check runs on 32 fresh inputs (stronger than the
+        // user-example gate); no exactly-named op -> false -> stays tentative.
+        let nl = crate::verified_nl_router::split_prompt_examples(query).0;
+        let confirmed = synthesis.success
+            && crate::site::fn_name_from_mog(&synthesis.code).is_some_and(|entry| {
+                crate::constraint_oracle::confirm_from_prompt(&synthesis.code, &entry, &nl)
+            });
         let method = if synthesis.success
             && !user_oracle
+            && !confirmed
             && !synthesis.method.contains(":tentative")
         {
             format!("{}:tentative", synthesis.method)

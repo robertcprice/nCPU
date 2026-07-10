@@ -50,17 +50,35 @@ fn learned_ops_path() -> Option<std::path::PathBuf> {
     std::env::var_os("NSYNTH_LEARNED_OPS_PATH").map(std::path::PathBuf::from)
 }
 
-/// Process-wide in-memory store, lazily seeded from the on-disk JSONL (so a FRESH
-/// process inherits every op a prior run learned — the cross-run flywheel).
+/// The distilled ops the flywheel has taught, SHIPPED with the engine. Each was proposed
+/// by the model, verified against held-out examples + a robustness floor, then fresh-input
+/// re-verified before landing here — so it is a MODEL-FREE capability the product recovers
+/// by default (no NSYNTH_LEARNED_OPS_PATH needed). `try_learned` still checks arity, types,
+/// and reproduce-ALL-examples on every recall, so a bundled op is never returned unless it
+/// actually reproduces the task's examples. Refresh by copying a grown runtime store here.
+const BUNDLED_LEARNED_OPS: &str = include_str!("../bench/harvested_ops.jsonl");
+
+/// Process-wide in-memory store, lazily seeded from the BUNDLED distilled ops plus any
+/// on-disk JSONL a `NSYNTH_LEARNED_OPS_PATH` points at (so a FRESH process inherits both
+/// the shipped flywheel gains and every op a prior run learned — the cross-run flywheel).
 fn learned_store() -> &'static Mutex<Vec<LearnedOp>> {
     static STORE: OnceLock<Mutex<Vec<LearnedOp>>> = OnceLock::new();
     STORE.get_or_init(|| {
         let mut v = Vec::new();
+        // Baseline: the shipped distilled ops, always loaded.
+        for line in BUNDLED_LEARNED_OPS.lines() {
+            if let Ok(op) = serde_json::from_str::<LearnedOp>(line) {
+                v.push(op);
+            }
+        }
+        // Plus the growing runtime store (deduped by exact program text against the bundle).
         if let Some(path) = learned_ops_path() {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 for line in text.lines() {
                     if let Ok(op) = serde_json::from_str::<LearnedOp>(line) {
-                        v.push(op);
+                        if !v.iter().any(|o| o.mog == op.mog) {
+                            v.push(op);
+                        }
                     }
                 }
             }
@@ -814,6 +832,27 @@ pub const OPS: &[LibOp] = &[
 "fn kth_smallest(arr: [i64], k: i64) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out[k - 1];\n}\n" },
     LibOp { name: "kth_largest", arity: 2, mog:
 "fn kth_largest(arr: [i64], k: i64) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out[out.len - k];\n}\n" },
+    // ── param-carrying array SLICES ((arr, k) -> [i64]) ────────────────────
+    // The base enumerator cannot induce a (Vec,k)->Vec transform from a few I/O rows
+    // (the k arg parametrises the shape, so no fixed-length example set pins it). These
+    // verified library ops give the never-wrong front door a NAMED target: a repo test
+    // asserting `k_largest(vec![5,1,9,3], 2) == vec![9,5]` + the issue "the k largest
+    // elements" resolves here (name tokens 'k' + 'largest'), example-gated. Clamp k to
+    // the length so an out-of-range k yields the whole slice, never an index fault.
+    LibOp { name: "k_largest", arity: 2, mog:
+"fn k_largest(arr: [i64], k: i64) -> [i64] {\n    tmp: [i64] = [];\n    for e in arr {\n        tmp.push(e);\n    }\n    tmp.sort();\n    out: [i64] = [];\n    n: i64 = tmp.len;\n    lim: i64 = k;\n    if lim > n {\n        lim = n;\n    }\n    i: i64 = 0;\n    while i < lim {\n        out.push(tmp[n - 1 - i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "k_smallest", arity: 2, mog:
+"fn k_smallest(arr: [i64], k: i64) -> [i64] {\n    tmp: [i64] = [];\n    for e in arr {\n        tmp.push(e);\n    }\n    tmp.sort();\n    out: [i64] = [];\n    n: i64 = tmp.len;\n    lim: i64 = k;\n    if lim > n {\n        lim = n;\n    }\n    i: i64 = 0;\n    while i < lim {\n        out.push(tmp[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // First k elements (prefix). first_k([5,1,9,3],2) -> [5,1].
+    LibOp { name: "first_k", arity: 2, mog:
+"fn first_k(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    n: i64 = arr.len;\n    lim: i64 = k;\n    if lim > n {\n        lim = n;\n    }\n    i: i64 = 0;\n    while i < lim {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Last k elements (suffix). last_k([5,1,9,3],2) -> [9,3].
+    LibOp { name: "last_k", arity: 2, mog:
+"fn last_k(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    n: i64 = arr.len;\n    start: i64 = n - k;\n    if start < 0 {\n        start = 0;\n    }\n    i: i64 = start;\n    while i < n {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Skip the first k (drop). drop_k([5,1,9,3],2) -> [9,3]. k>=len -> empty.
+    LibOp { name: "drop_k", arity: 2, mog:
+"fn drop_k(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    n: i64 = arr.len;\n    start: i64 = k;\n    if start < 0 {\n        start = 0;\n    }\n    i: i64 = start;\n    while i < n {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // (rotate_left / rotate_right already exist below; not re-added here.)
     // ── count / frequency without a dict (O(n²) scans) ─────────────────────
     LibOp { name: "count_distinct", arity: 1, mog:
 "fn count_distinct(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        first: i64 = 1;\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                first = 0;\n            }\n            j = j + 1;\n        }\n        c = c + first;\n        i = i + 1;\n    }\n    return c;\n}\n" },
@@ -1600,6 +1639,14 @@ fn op_types_match(mog: &str, inputs: &[crate::benchmark::Value]) -> bool {
     true
 }
 
+/// Snapshot of the learned-op store (bundled distilled ops + any runtime-grown ones).
+/// Lets the NL router propose a learned op BY NAME (its Mog fn name) so a prompt that
+/// names the operation routes to it through the verified, name-matched path — surfacing
+/// distilled capability the behaviour tiers correctly refuse when the prompt names no op.
+pub fn learned_ops_snapshot() -> Vec<LearnedOp> {
+    learned_store().lock().map(|s| s.clone()).unwrap_or_default()
+}
+
 /// The runtime-grown tier: behaviour-match the learned-op store (see
 /// [`LearnedOp`]). Empty (and free) unless `NSYNTH_LEARNED_OPS_PATH` is set.
 fn try_learned(problem: &Problem, arity: usize) -> Option<SolveResult> {
@@ -1665,6 +1712,11 @@ mod tests {
             ("count_primes_below", vec![Value::Int(10)], Value::Int(4)),
             ("array_range", vec![iv(&[3, 8, 1, 6])], Value::Int(7)),
             ("count_negatives", vec![iv(&[-1, 2, -3, -4, 5])], Value::Int(3)),
+            ("k_largest", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 5])),
+            ("k_smallest", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[1, 3])),
+            ("first_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[5, 1])),
+            ("last_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 3])),
+            ("drop_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 3])),
             ("reverse_string", vec![Value::Str("abc".into())], Value::Str("cba".into())),
             ("to_upper", vec![Value::Str("aBc".into())], Value::Str("ABC".into())),
             ("to_lower", vec![Value::Str("aBc".into())], Value::Str("abc".into())),
@@ -2066,6 +2118,37 @@ mod tests {
             ("binomial_coeff", vec![Value::Int(5), Value::Int(2)], Value::Int(10)),
             ("is_octagonal", vec![Value::Int(65)], Value::Int(1)),
             ("is_octagonal", vec![Value::Int(66)], Value::Int(0)),
+        ];
+        for (name, args, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, args.clone(), expect.clone()),
+                "op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn param_array_slice_ops_reproduce_their_probes() {
+        // (arr, k) -> [i64] ops the base enumerator cannot induce; each hand-computed.
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<Value>, Value)] = &[
+            ("k_largest", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 5])),
+            ("k_largest", vec![iv(&[4, 4, 2, 8, 1]), Value::Int(3)], iv(&[8, 4, 4])),
+            // k > len clamps to the whole (descending) list.
+            ("k_largest", vec![iv(&[3, 1]), Value::Int(9)], iv(&[3, 1])),
+            ("k_smallest", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[1, 3])),
+            ("k_smallest", vec![iv(&[4, 4, 2, 8, 1]), Value::Int(3)], iv(&[1, 2, 4])),
+            ("first_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[5, 1])),
+            ("first_k", vec![iv(&[7, 8]), Value::Int(5)], iv(&[7, 8])),
+            ("last_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 3])),
+            ("last_k", vec![iv(&[7, 8]), Value::Int(5)], iv(&[7, 8])),
+            ("drop_k", vec![iv(&[5, 1, 9, 3]), Value::Int(2)], iv(&[9, 3])),
+            ("drop_k", vec![iv(&[5, 1, 9, 3]), Value::Int(9)], iv(&[])),
+            ("rotate_left", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(2)], iv(&[3, 4, 5, 1, 2])),
+            ("rotate_left", vec![iv(&[1, 2, 3]), Value::Int(3)], iv(&[1, 2, 3])),
+            ("rotate_right", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(2)], iv(&[4, 5, 1, 2, 3])),
+            ("rotate_right", vec![iv(&[1, 2, 3]), Value::Int(4)], iv(&[3, 1, 2])),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));

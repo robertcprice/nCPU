@@ -25,7 +25,7 @@ use crate::runtime::{execute_function, Value as RValue};
 
 /// A decidable property the OUTPUT must satisfy given the INPUTS, derived from
 /// the request's resolved operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
     /// output == max of the single int-array input
     IsMax,
@@ -190,6 +190,151 @@ pub fn verify_candidate(
         prop.holds(&inputs, &output)?;
     }
     Ok(())
+}
+
+/// ORACLE MANUFACTURING. Confirm a bare-NL (no-example) guess reference-free and
+/// EMERGENTLY. [`reference_for`] resolves the prompt to the SINGLE library op whose
+/// operation-word signature exactly equals the prompt's — the completeness gate that makes
+/// "sum of squares" / "second largest" / a two-op compose resolve to nothing — then the
+/// candidate is DIFFERENTIALLY executed against that op's verified `.mog` on many fresh
+/// inputs. Agreement everywhere means the candidate computes that exact operation, so the
+/// guess is confirmed (drop tentative); a wrong candidate (e.g. a mis-built max combinator)
+/// disagrees on a fresh input and stays tentative. Works for both a library match (candidate
+/// == reference => trivially agrees) and an untrusted synthesis (real differential check).
+/// The "spec" is the resolved reference's behavior, not a hand-written property table. Any
+/// no-match / shape-mismatch / crash => false (honest: stays tentative, never confident-wrong).
+pub fn confirm_from_prompt(code: &str, fn_name: &str, prompt: &str) -> bool {
+    let Some(cand_types) = sig_param_types(code) else {
+        return false;
+    };
+    let Some(reference) = crate::verified_nl_router::reference_for(prompt, &cand_types) else {
+        return false;
+    };
+    differential_matches(code, fn_name, reference.mog, 32, 0x00ac_1e50)
+}
+
+/// True iff `cand` (its `cand_fn`) computes the SAME function as the reference program
+/// `ref_mog` on `n` fresh inputs shaped to the reference's signature. Any disagreement, a
+/// crash on either side, or an un-buildable input shape => false (fail-closed).
+fn differential_matches(cand: &str, cand_fn: &str, ref_mog: &str, n: usize, seed: u64) -> bool {
+    let Some(ref_fn) = crate::site::fn_name_from_mog(ref_mog) else {
+        return false;
+    };
+    let Some(param_types) = sig_param_types(ref_mog) else {
+        return false;
+    };
+    for inputs in fresh_typed_args(&param_types, n, seed) {
+        let (Ok(a), Ok(b)) = (
+            execute_function(ref_mog, &ref_fn, &inputs, "constraint_oracle"),
+            execute_function(cand, cand_fn, &inputs, "constraint_oracle"),
+        ) else {
+            return false;
+        };
+        if !outputs_agree(&a, &b) {
+            return false;
+        }
+    }
+    true
+}
+
+/// True iff `p` (its fn `p_fn`) and `q` (its fn `q_fn`) are DISTINGUISHABLE — they produce
+/// a DIFFERENT output for at least one fresh input shaped to `p`'s signature. Reuses the same
+/// fresh-input differential as [`confirm_from_prompt`]. Used by the bare-NL composition tier
+/// to reject a 2-op chain `b(a(x))` that is INDISTINGUISHABLE from its own inner op `a` (the
+/// outer op does nothing observable, so the prompt is really a single-op request). A crash on
+/// exactly one side is an observable difference (distinguishable); if `p`'s signature can't be
+/// parsed or its inputs can't be sampled, returns false (fail-safe: treat as indistinguishable
+/// so the caller refuses the chain rather than shipping an unproven composition).
+pub fn programs_distinguishable(p: &str, p_fn: &str, q: &str, q_fn: &str) -> bool {
+    let Some(param_types) = sig_param_types(p) else {
+        return false;
+    };
+    let args = fresh_typed_args(&param_types, 32, 0x51a9_bd27_0e13_c4a1);
+    if args.is_empty() {
+        return false; // unsupported input shape -> cannot sample -> fail-safe
+    }
+    for inputs in args {
+        match (
+            execute_function(p, p_fn, &inputs, "constraint_oracle"),
+            execute_function(q, q_fn, &inputs, "constraint_oracle"),
+        ) {
+            (Ok(a), Ok(b)) => {
+                if !outputs_agree(&a, &b) {
+                    return true; // observed a difference
+                }
+            }
+            // exactly one side errs on a valid input => observably different behaviour;
+            // both err => no evidence of a difference (keep scanning / stay closed).
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) => return true,
+            (Err(_), Err(_)) => {}
+        }
+    }
+    false
+}
+
+/// Parse a Mog signature's parameter TYPE strings, e.g. `fn f(a: i64, b: [i64]) -> i64`
+/// -> ["i64", "[i64]"]. `None` if the signature can't be parsed. Empty vec = nullary.
+fn sig_param_types(mog: &str) -> Option<Vec<String>> {
+    let (o, c) = (mog.find('(')?, mog.find(')')?);
+    if c < o {
+        return None;
+    }
+    let inner = mog[o + 1..c].trim();
+    if inner.is_empty() {
+        return Some(vec![]);
+    }
+    inner
+        .split(',')
+        .map(|p| p.split(':').nth(1).map(|t| t.trim().to_string()))
+        .collect()
+}
+
+/// Deterministic fresh argument tuples matching a list of Mog parameter types. Supports the
+/// shapes the oracle can build+compare (i64, [i64], string, bool); returns an empty batch if
+/// any type is unsupported so confirmation fails closed rather than guessing on a shape it
+/// can't sample.
+fn fresh_typed_args(param_types: &[String], n: usize, seed: u64) -> Vec<Vec<Value>> {
+    let mut state = seed ^ 0x2545_f491_4f6c_dd1d;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut args = Vec::with_capacity(param_types.len());
+        for ty in param_types {
+            match ty.as_str() {
+                // Scalars stay small (|n| <= 20) so exponential-growth ops don't overflow i64
+                // on a fresh input and fail closed: 20! < i64::MAX but 21! overflows, and a
+                // correct factorial/power op would be wrongly left tentative on a large sample.
+                "i64" => args.push(Value::Int((lcg(&mut state) % 41) as i64 - 20)),
+                "[i64]" => {
+                    let len = 1 + (lcg(&mut state) % 7) as usize; // 1..=7 (non-empty: max/min safe)
+                    let arr: Vec<i64> =
+                        (0..len).map(|_| (lcg(&mut state) % 41) as i64 - 20).collect();
+                    args.push(Value::int_array(&arr));
+                }
+                "string" => {
+                    let len = (lcg(&mut state) % 8) as usize; // 0..=7
+                    let s: String = (0..len)
+                        .map(|_| (b'a' + (lcg(&mut state) % 26) as u8) as char)
+                        .collect();
+                    args.push(Value::Str(s));
+                }
+                "bool" => args.push(Value::Bool(lcg(&mut state) % 2 == 0)),
+                _ => return Vec::new(), // unsupported shape -> fail closed
+            }
+        }
+        out.push(args);
+    }
+    out
+}
+
+/// Structural equality of two runtime outputs over the shapes the oracle differential-tests.
+fn outputs_agree(a: &RValue, b: &RValue) -> bool {
+    match (a, b) {
+        (RValue::Int(x), RValue::Int(y)) => x == y,
+        (RValue::Bool(x), RValue::Bool(y)) => x == y,
+        (RValue::Str(x), RValue::Str(y)) => x == y,
+        (RValue::Array(_), RValue::Array(_)) => rarr(a) == rarr(b),
+        _ => rt_eq(a, b),
+    }
 }
 
 /// Deterministic fresh inputs for a property's input shape. Deterministic (LCG,
@@ -486,6 +631,35 @@ mod tests {
     // Overfit: returns the FIRST element. Matches any example where arr[0] is the
     // max, but is not actually the maximum.
     const MAX_FAKE: &str = "fn array_max(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
+
+    const REF_MAX: &str = "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n";
+
+    #[test]
+    fn differential_confirm_is_vs_reference() {
+        // A correct candidate agrees with the reference on every fresh input; a subtle
+        // overfit (returns arr[0]) disagrees and stays tentative — no reference oracle needed
+        // beyond the resolved op's own verified impl.
+        assert!(differential_matches(MAX_OK, "array_max", REF_MAX, 32, 0x00ac_1e50));
+        assert!(!differential_matches(MAX_FAKE, "array_max", REF_MAX, 32, 0x00ac_1e50));
+    }
+
+    #[test]
+    fn programs_distinguishable_detects_observable_difference() {
+        // Two identical impls are NOT distinguishable (agree on every fresh input).
+        assert!(!programs_distinguishable(MAX_OK, "array_max", REF_MAX, "array_max"));
+        // max vs first-element: they disagree on some fresh array -> distinguishable.
+        assert!(programs_distinguishable(MAX_OK, "array_max", MAX_FAKE, "array_max"));
+    }
+
+    #[test]
+    fn sig_param_types_parses_shapes() {
+        assert_eq!(sig_param_types(REF_MAX), Some(vec!["[i64]".to_string()]));
+        assert_eq!(
+            sig_param_types("fn f(a: i64, b: [i64]) -> i64 { return a; }"),
+            Some(vec!["i64".to_string(), "[i64]".to_string()])
+        );
+        assert_eq!(sig_param_types("fn g() -> i64 { return 0; }"), Some(vec![]));
+    }
 
     const ABS_OK: &str = "fn absolute(x: i64) -> i64 {\n    if x < 0 {\n        return 0 - x;\n    }\n    return x;\n}\n";
     // Overfit: identity. Matches non-negative examples, fails on negatives.

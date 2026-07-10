@@ -160,6 +160,18 @@ impl RepoRunSupervisor {
             .run_with_context(task, &context, &proposer)
             .map_err(|e| e.to_string())?;
 
+        // DISTILL a model-INTENT solve ONLY on a true repo-test accept: if the winning
+        // patch came from the gated model side door, its engine-synthesized program is
+        // absorbed into the learned store so a future run solves this task model-free
+        // (the model teaches once). Both calls are inert no-ops when no model was in the
+        // loop (nothing staged) — zero effect on any default run. A non-accepting run
+        // drops the staged candidate so a rejected spec never teaches the store.
+        if repair.success {
+            let _ = crate::agent::synthesis_proposer::distill_accepted_model_solve(&task.id);
+        } else {
+            crate::agent::synthesis_proposer::discard_model_distillation(&task.id);
+        }
+
         let agent_status = if run_path.exists() {
             Some(AgentRun::load(&run_path)?.status)
         } else {
@@ -225,16 +237,17 @@ pub fn nl_synthesis_proposer_with_run(
 ) -> Result<crate::agent::repo::RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
 
-    // Cheap deterministic edits first (no synthesis budget): a RENAME refactor or an ADD-PARAM
-    // request. Present in the standalone nl_synthesis_proposer but MISSING from this supervisor
-    // ladder (which was an incomplete copy), so repo repairs never reached them.
-    if let Some(patch) = crate::agent::synthesis_proposer::try_rename_patch(context, &description) {
-        return Ok(patch);
-    }
-    if let Some(patch) =
-        crate::agent::synthesis_proposer::try_add_param_patch(context, &description)
-    {
-        return Ok(patch);
+    // EXTRACT-HELPER refactor (Lever D): a Refactor task "extract ... into a helper called X"
+    // is a structural, behaviour-preserving edit (hoist a repeated pure-i64 sub-expression into a
+    // new fn + rewrite call sites). Run it FIRST, before synthesis: it declines cleanly on any
+    // non-extract prose or unclear free-variable analysis, and the real cargo-test oracle still
+    // gates behaviour preservation.
+    if matches!(task.kind, crate::agent::repo::RepoTaskKind::Refactor) {
+        if let Some(patch) =
+            crate::agent::synthesis_proposer::try_extract_helper_patch(context, &description)
+        {
+            return Ok(patch);
+        }
     }
 
     // Primary path: genuine verified synthesis (bridge + solver), generalizing
@@ -300,6 +313,18 @@ pub fn nl_synthesis_proposer_with_run(
         }
     }
 
+    // BEHAVIOR-DRIVEN LIBRARY RESOLUTION (free, no synthesis budget): a bare "fix the failing
+    // test" carries no prose to name an op, but its `assert_eq!` I/O pins the behavior. Find the
+    // SINGLE verified library op that reproduces every mined example (unique-or-defer), so a
+    // library-covered function is repaired by behavior alone — no NL, sidestepping the lg-core
+    // comprehension collapse. A wrong library guess that fit the few points is caught by the
+    // real cargo-test oracle; ambiguity refuses rather than guesses.
+    if let Some(patch) =
+        crate::library_probe::try_library_behavior_patch(task, context, &description)
+    {
+        return Ok(patch);
+    }
+
     if let Some(patch) = crate::agent::synthesis_proposer::try_nl_repo_fast_patch(
         task,
         context,
@@ -309,43 +334,15 @@ pub fn nl_synthesis_proposer_with_run(
         return Ok(patch);
     }
 
-    // PHASE 1 — MULTI-HOLE COORDINATION (model-free): a repo with SEVERAL empty stubs that only
-    // compiles once every hole is filled defeats single-hole proposers (no one fill compiles). Fill
-    // all holes to a type-default (compile floor), then coordinate-descend field-derived candidate
-    // bodies per hole, keeping fills that raise the passing-test count until the suite is green. One
-    // multi-file patch, cargo-gated, no model. Inert (returns fast) when <2 holes exist.
+    // GATED MODEL-INTENT side door (terminal, after every deterministic lane): an
+    // optional local LLM proposes a SPEC (I/O examples), the engine synthesizes +
+    // strictly verifies, and the cargo-test oracle still gates the patch. Inert
+    // without NSYNTH_LOCAL_LLM_URL, so this is a zero-effect no-op on any default run.
+    // On acceptance the engine-synthesized program is distilled by the supervisor
+    // (see `execute_nl_task`) so a future run solves the same task model-free.
     if let Some(patch) =
-        crate::agent::synthesis_proposer::try_multihole_fill_patch(task, context, analysis)
+        crate::agent::synthesis_proposer::try_model_intent_patch(task, context, &description)
     {
-        return Ok(patch);
-    }
-
-    // MODEL-FREE MUTATION REPAIR: before reaching for the model, let the deterministic engine code
-    // BEYOND pure-function synthesis — search single-edit mutations of the EXISTING buggy code
-    // (wrong operator, off-by-one, `=` vs `+=`, a bug in a struct method with no I/O pairs to mine)
-    // and keep the first whose edit makes cargo test pass. No model, no examples — search + the test
-    // oracle. Runs after the synthesizers (which handle stubs) and before the LLM.
-    if let Some(patch) =
-        crate::agent::synthesis_proposer::try_mutation_repair_patch(task, context, analysis)
-    {
-        return Ok(patch);
-    }
-
-    // LLM EDIT LANE (the real coding-agent driver): when every deterministic proposer declines —
-    // the case for real code the pure-function synthesizer can't express (struct methods, state,
-    // Option/Result, a bug in a called fn) — the gated local model reads the CURRENT function body +
-    // the concrete cargo failure and proposes a targeted Rust edit. The RepairLoop applies it, runs
-    // cargo test, and feeds any failure back for the next iteration. INERT without NSYNTH_LOCAL_LLM_URL
-    // (propose_rust_fn returns None), and the model NEVER bypasses a gate: the acceptance oracle is
-    // still cargo test, so a wrong or non-compiling proposal is rolled back like any other patch.
-    // This is the lane the standalone nl_synthesis_proposer already has; the supervisor (CLI) path
-    // was missing it, so the CLI never reached the model — the gap that made real code fall through.
-    if let Some(patch) = crate::agent::synthesis_proposer::try_model_repair_patch(
-        task,
-        context,
-        &description,
-        analysis,
-    ) {
         return Ok(patch);
     }
 

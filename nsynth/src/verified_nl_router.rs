@@ -521,6 +521,173 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
 /// has more freedom to coincide). The O(n^2) surface is bounded by TYPE-chaining
 /// (a: in->mid, b: mid->out) + an early reject on the first example, and it runs only
 /// as a fallback after the named tiers, so cost is paid rarely.
+/// True when `code` special-cases an INTERIOR example input with a hardcoded literal
+/// return — the memorization signature of a search that fit a formula to most points and
+/// patched the one it missed (`if 10 != x { ... } return 17;` for "sum of primes"). Fires
+/// only for a single scalar-int input `c` with `|c| > 2` (so genuine boundary base cases —
+/// `if n == 0 { return 1 }` in factorial — are never flagged) whose exact output `L` is
+/// both compared against and returned as a bare literal. Purely structural, no oracle.
+fn special_case_memorizes_example(code: &str, examples: &[crate::benchmark::Example]) -> bool {
+    use crate::benchmark::Value;
+    for ex in examples {
+        let [Value::Int(c)] = ex.inputs.as_slice() else { continue };
+        if c.abs() <= 2 {
+            continue; // boundary (0/1/-1/2) — a legitimate base case, not memorization
+        }
+        let Value::Int(l) = ex.expected else { continue };
+        // An (in)equality branch testing the input against this interior example input.
+        let has_cmp = [
+            format!("== {c}"), format!("=={c}"), format!("{c} =="), format!("{c}=="),
+            format!("!= {c}"), format!("!={c}"), format!("{c} !="), format!("{c}!="),
+        ]
+        .iter()
+        .any(|p| code.contains(p.as_str()));
+        // ...and a bare-literal return of this example's exact output.
+        let has_ret = code.contains(&format!("return {l};"))
+            || code.contains(&format!("return {l} "))
+            || code.contains(&format!("return {l}\n"));
+        if has_cmp && has_ret {
+            return true;
+        }
+    }
+    false
+}
+
+/// Route to a DISTILLED (learned/bundled) op the prompt NAMES. `ranked_candidates` only
+/// proposes hand ops (`OPS`), so a prompt naming a flywheel-taught op ("the nth prime
+/// number" -> the distilled `nth_prime`) never reaches it, and the behaviour tiers refuse
+/// the un-named scalar match (sole-passer guard). This proposes learned ops BY their Mog fn
+/// name: a name-token match is PROVENANCE, exactly like `route_verified`'s hand-op match, so
+/// returning a verified passer is never-wrong-safe. Requires an OPERATION-bearing token
+/// match (not a generic type noun); multi-passer divergence on fresh probes -> refuse.
+/// Returns (code, entry_fn_name).
+pub fn route_learned_by_name(
+    prompt: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    if examples.is_empty() {
+        return None;
+    }
+    let learned = crate::op_library::learned_ops_snapshot();
+    if learned.is_empty() {
+        return None;
+    }
+    let ptoks = content_tokens(prompt);
+    if ptoks.is_empty() {
+        return None;
+    }
+    // DISTINCT-example floor. A learned op with a partial name overlap ("square" in
+    // `digit_sum_of_square`) can reproduce a handful of degenerate points while computing a
+    // DIFFERENT function; the store's large size makes such a coincidence likely on thin
+    // specs. Require enough distinct points to pin a scalar-output op (i64/bool are the
+    // coincidence-prone case); structured/array outputs are specific enough to keep 3.
+    let distinct = crate::benchmark::dedup_consistent_examples(examples)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let out_ty = examples.first().map(|e| value_type_str(&e.expected)).unwrap_or("?");
+    let floor = if matches!(out_ty, "i64" | "bool") { 4 } else { 3 };
+    if distinct < floor {
+        return None;
+    }
+    let has = |t: &str| ptoks.iter().any(|p| p == t || (t.len() >= 4 && p.starts_with(t)));
+    let input_types: Vec<&'static str> = examples
+        .first()
+        .map(|e| e.inputs.iter().map(value_type_str).collect())
+        .unwrap_or_default();
+    // (code, entry_fn, name-coverage) — coverage = matched name tokens / total, so the op
+    // the prompt most-fully NAMES wins (like ranked_candidates), not a partial-overlap op.
+    let mut passing: Vec<(String, String, f64)> = Vec::new();
+    for op in &learned {
+        let Some(fname) = crate::site::fn_name_from_mog(&op.mog) else {
+            continue;
+        };
+        let name_toks = content_tokens(&fname);
+        if name_toks.is_empty() {
+            continue;
+        }
+        // Candidacy: at least one OPERATION-bearing token (not a generic type noun).
+        let matched_specific = name_toks
+            .iter()
+            .filter(|t| has(t) && !is_generic_type_token(t))
+            .count();
+        if matched_specific == 0 {
+            continue;
+        }
+        if !op_accepts_types(&op.mog, &input_types) {
+            continue;
+        }
+        if crate::runtime::code_reproduces_examples(&op.mog, examples) {
+            let matched = name_toks.iter().filter(|t| has(t)).count();
+            let coverage = matched as f64 / name_toks.len() as f64;
+            passing.push((op.mog.clone(), fname, coverage));
+        }
+    }
+    // Prefer the most-named op (highest coverage). A `square` op (coverage 1.0) outranks
+    // `digit_sum_of_square` (coverage 1/3) for "the square of a number".
+    passing.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    // Distinguishing gate: if >1 DISTINCT named passer diverges on fresh probes, the
+    // examples under-determine the choice -> refuse (same as the hand-op tiers).
+    let progs: Vec<(String, String)> = passing.iter().map(|(c, n, _)| (c.clone(), n.clone())).collect();
+    if progs.len() > 1 && programs_disagree(&progs, examples) {
+        return None;
+    }
+    passing.into_iter().next().map(|(c, n, _)| (c, n))
+}
+
+/// FIXPOINT comprehension — the emergent handle on a DEFINITIONAL prompt. "repeatedly
+/// <OP> until <it stabilizes>" describes the FIXPOINT of a named operation: "repeatedly sum
+/// the digits of a number until a single digit remains" is the fixpoint of sum_of_digits
+/// (= the digital root), which the prompt never NAMES. Resolve the operation PHRASE (the span
+/// between the iteration trigger and "until") to a unary i64->i64 library op, synthesize a
+/// bounded `while op(v) != v` fixpoint driver, and verify it against the examples. Condition-
+/// FREE: iterating to the op's own fixpoint sidesteps parsing the termination clause ("a
+/// single digit"), so there is no hand-list. The op is NAME-resolved (provenance) AND the
+/// result is EXAMPLE-verified, so this is as never-wrong-safe as route_verified. Returns
+/// (code, entry_fn).
+pub fn route_fixpoint(
+    prompt: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    let first = examples.first()?;
+    // Scalar fixpoint only: a unary i64 -> i64 task.
+    if first.inputs.len() != 1
+        || value_type_str(&first.inputs[0]) != "i64"
+        || value_type_str(&first.expected) != "i64"
+    {
+        return None;
+    }
+    let lower = prompt.to_lowercase();
+    if !lower.contains("until") {
+        return None;
+    }
+    // Iteration trigger: "repeatedly" / "repeat" / "keep".
+    let trig_end = ["repeatedly", "repeat", "keep"]
+        .iter()
+        .find_map(|t| lower.find(t).map(|i| i + t.len()))?;
+    let until_at = lower.find("until")?;
+    if until_at <= trig_end {
+        return None;
+    }
+    // The operation phrase, resolved to a unary i64->i64 library op via the usual name path.
+    let phrase = prompt[trig_end..until_at].trim();
+    let op = declare(phrase)?;
+    let (params, ret) = op_sig_types(op.mog);
+    if params.len() != 1 || params[0] != "i64" || ret != "i64" {
+        return None;
+    }
+    let entry = op_entry_name(op.mog)?;
+    // Bounded fixpoint driver (a non-converging op can never stall this) + the op's own def.
+    let code = format!(
+        "fn fixpoint(v0: i64) -> i64 {{\n    v: i64 = v0;\n    guard: i64 = 0;\n    while guard < 100000 {{\n        nv: i64 = {entry}(v);\n        if nv == v {{\n            return v;\n        }}\n        v = nv;\n        guard = guard + 1;\n    }}\n    return v;\n}}\n{}",
+        op.mog
+    );
+    if crate::runtime::code_reproduces_examples(&code, examples) {
+        Some((code, "fixpoint".to_string()))
+    } else {
+        None
+    }
+}
+
 pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Option<String> {
     let first = examples.first()?;
     if first.inputs.len() != 1 {
@@ -529,11 +696,23 @@ pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Opt
     let distinct = crate::benchmark::dedup_consistent_examples(examples)
         .map(|v| v.len())
         .unwrap_or(0);
-    if distinct < 3 {
-        return None;
-    }
     let in_ty = value_type_str(&first.inputs[0]);
     let out_ty = value_type_str(&first.expected);
+    // A behaviour composition names NEITHER op, so it searches ~every type-compatible op
+    // PAIR — a large coincidence surface. A bare scalar int/bool output is the worst case:
+    // for a number-theoretic tail (e.g. "sum of primes"), an OPAQUE chain can fit a handful
+    // of points by accident and clear the distinguishing gate (measured: sum_of_primes ->
+    // sum_of_primes_below(x | (x+1)) reproduces 3 examples, confident-WRONG on held-out).
+    // Require one MORE distinct example (4, not 3) to pin a scalar-output un-named chain:
+    // a 3-point monotonic spec (e.g. sum_of_primes on {2,5,10}) is where the opaque
+    // coincidences fit, while a well-determined 4-point scalar spec that spans the domain
+    // (abs on {-3,5,-10,0}) still resolves. Structured / array / string outputs are
+    // specific enough that a coincidence is unlikely, so they keep the 3-example floor.
+    // Named compositions (route_composed) are unaffected.
+    let floor = if matches!(out_ty, "i64" | "bool") { 4 } else { 3 };
+    if distinct < floor {
+        return None;
+    }
     let fname = "composed";
     let first_expected = &first.expected;
     // Cap the collected chains: past this many reproducers the spec is almost surely
@@ -803,6 +982,14 @@ pub fn answer_with_proposer(
     proposer: Option<&Proposer>,
 ) -> Answer {
     if examples.is_empty() {
+        // DEFECT-A GUARD: a prompt that names exactly ONE complete library op must resolve to
+        // that single op, never a 2-op composition that merely reuses its tokens. The correct
+        // single op wins over any behavior-composition for the SAME prompt: `count_positives`
+        // fully explains "count how many elements are positive", so the type-compatible chain
+        // is_positive(count_positives(x)) (returns 0/1, not the count) must NOT preempt it.
+        if let Some(op) = sole_op_for_prompt(prompt) {
+            return Answer::Library { name: op.name, code: op.mog.to_string() };
+        }
         if let Some(code) = declare_composed(prompt) {
             return Answer::Composition { code };
         }
@@ -813,6 +1000,12 @@ pub fn answer_with_proposer(
     }
     if let Some(r) = route_verified(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // NAME-MATCHED DISTILLED op: a prompt that names a flywheel-taught op ("the nth prime
+    // number" -> distilled `nth_prime`) routes here — same name-match provenance as
+    // route_verified, so it is never-wrong-safe (verified + distinguishing-gated inside).
+    if let Some((code, fname)) = route_learned_by_name(prompt, examples) {
+        return Answer::Synthesized { method: format!("library-learned:{fname}"), code };
     }
     // AMBIGUOUS single-op spec? If TWO OR MORE library ops reproduce the examples yet
     // DISAGREE on fresh inputs, the examples do not pin down even a single op — the
@@ -837,6 +1030,11 @@ pub fn answer_with_proposer(
     // -gated, so a coincidental match refuses instead of shipping wrong.
     if let Some(r) = route_by_behavior(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // FIXPOINT tier — a definitional "repeatedly <OP> until ..." prompt (digital root =
+    // repeatedly sum digits). Name-resolved op + example-verified fixpoint -> never-wrong.
+    if let Some((code, _)) = route_fixpoint(prompt, examples) {
+        return Answer::Synthesized { method: "fixpoint".to_string(), code };
     }
     // The examples fit >=2 disagreeing single ops but the behaviour tier could not pick
     // one — refuse rather than let composition/synthesis re-ship the coincidence.
@@ -986,15 +1184,39 @@ pub fn answer_with_proposer(
                     outs.len() >= 3 && outs.iter().all(|v| v == &outs[0])
                 }
             };
+            // SPECIAL-CASE MEMORIZATION GATE. For a function the engine cannot truly
+            // synthesize (a number-theoretic tail like "sum of primes"), the branch
+            // search fits a smooth formula to most points and HARDCODES the one input
+            // where it fails: `if 10 != x { return (x/2)*x; } return 17;` reproduces
+            // every example yet is confidently WRONG elsewhere. The holdout can't catch
+            // it (the memorized point is inside the examples) and two seed-syntheses
+            // converge on the same overfit, so programs_disagree stays silent. Detect it
+            // structurally: an equality branch that tests the input against an INTERIOR
+            // example input (|c| > 2, so genuine boundary base cases `if n==0 { 1 }` are
+            // NOT flagged) AND returns that example's exact output as a bare literal.
+            let special_case_overfit = special_case_memorizes_example(&code, examples);
             // A bare library-op match belongs to the gated behaviour tier
             // (route_by_behavior ran first with the distinguishing gate). If a library
             // op still reaches tier 3, it is one that tier REJECTED as coincidental
             // (sum_of_digits reproducing abs's single-digit examples, disagreeing with
             // reverse_number on -99) — solve_problem's internal try_library has no such
             // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
+            // INVARIANT ORACLE (reference-free): for an array transform, refuse a synthesis
+            // that reproduces the examples but BREAKS a structural invariant discovered from
+            // them (length/multiset/subset/sorted) on a fresh input — a SOLE overfit the
+            // distinguishing gate (needing a second disagreeing program) cannot see. No-op
+            // for non-array tasks / when no non-trivial invariant is discoverable.
+            let array_overfit = crate::invariant_oracle::array_transform_overfit(&code, &entry, examples);
+            // Scalar sibling: a monotonic i64->i64 task whose synthesis reproduces the
+            // examples but SPIKES out of the example-derived monotonic bounds on a fresh
+            // input (the sum_of_primes/nth_prime coincidence class) -> overfit -> refuse.
+            let mono_overfit = crate::invariant_oracle::scalar_monotonicity_overfit(&code, &entry, examples);
             if !boolean_overfit
                 && !pipeline_overfit
                 && !constant_overfit
+                && !special_case_overfit
+                && !array_overfit
+                && !mono_overfit
                 && !method.contains("library:")
                 && !programs_disagree(&progs, examples)
             {
@@ -1105,6 +1327,14 @@ pub fn declare(prompt: &str) -> Option<&'static LibOp> {
 /// or their types don't chain in prompt order. Like [`declare`], the honest
 /// completion is [`demonstrate`] — show the chain's behavior for the user to confirm.
 pub fn declare_composed(prompt: &str) -> Option<String> {
+    // DISTINGUISHING ORACLE, part 1 (defect B): if a SINGLE library op already explains the
+    // whole prompt (its operation-word signature equals the prompt's), the chain must not
+    // preempt it — that op is the intent. This is what stops is_positive(count_positives(x))
+    // from shadowing `count_positives` for "count how many elements are positive". Defer to the
+    // single-op tier (`declare` / the caller's sole-op guard) rather than ship a chain.
+    if sole_op_for_prompt(prompt).is_some() {
+        return None;
+    }
     // Ordered prompt words (lowercase); a prefix (>=4 chars) counts, so "uppercase"
     // matches the op token "upper".
     let words: Vec<String> = prompt
@@ -1148,12 +1378,129 @@ pub fn declare_composed(prompt: &str) -> Option<String> {
         return None; // types don't chain in prompt order
     }
     let (a_entry, b_entry) = (op_entry_name(a.mog)?, op_entry_name(b.mog)?);
-    Some(format!(
+    let code = format!(
         "fn composed(x0: {}) -> {b_ret} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
         a_params[0],
         a.mog.trim_end(),
         b.mog.trim_end()
-    ))
+    );
+    // DISTINGUISHING ORACLE, part 2 (defect B): the chain must do OBSERVABLE work beyond its
+    // inner op `a`. If b(a(x)) == a(x) on every fresh input, the outer op is behaviorally a
+    // no-op and the prompt is really a single-op request — refuse the chain and let the
+    // single-op tier answer. Reuses the constraint-oracle fresh-input differential; fail-safe
+    // (unsupported input shape => indistinguishable => refuse), never confidently wrong.
+    if !crate::constraint_oracle::programs_distinguishable(&code, "composed", a.mog, a_entry) {
+        return None;
+    }
+    Some(code)
+}
+
+/// Function / framing words that carry NO operation semantics — epistemic verbs
+/// ("check", "determine"), interrogatives ("how", "whether"), quantifier adverbs
+/// ("every", "many"), and copulas ("are", "be" — the plural/base of the already-stop
+/// "is", so "elements ARE positive" reduces to the same operation words as `count_positives`).
+/// Complements [`STOP`]; kept separate because it is used only by the operation-signature /
+/// confirmation-completeness gates ([`operation_signature`], [`names_only_op`]), not by
+/// routing/candidacy (where dropping a word could hide a real op token). Tokens arrive
+/// STEMMED. NB: it must NOT include any operation synonym — e.g. "total" (a `sum` synonym) is
+/// absent.
+fn is_framing_word(t: &str) -> bool {
+    matches!(
+        t,
+        "check" | "determine" | "tell" | "whether" | "if" | "how" | "many" | "much"
+            | "every" | "convert" | "turn" | "make" | "given" | "some" | "any" | "then"
+            | "whole" | "single" | "are" | "be"
+    )
+}
+
+/// The OPERATION-WORD signature of a phrase: its content tokens with container / generic
+/// type nouns and function/framing words removed, and each survivor canonicalized to its
+/// synonym-group id (so `total`==`sum`, `order`==`sort`, `double`==`two`, `list`/`array`
+/// both vanish as containers). Two phrases with the SAME signature name the same
+/// computation modulo vocabulary and data-shape wording. Emergent — built only from the
+/// resolver's tokenizer, synonym graph, and generic-noun sets; no per-op table.
+fn operation_signature(text: &str) -> std::collections::BTreeSet<String> {
+    let syn = synonym_group_of();
+    content_tokens(text)
+        .into_iter()
+        .filter(|t| !is_domain_type_token(t) && !is_framing_word(t))
+        .map(|t| syn.get(&t).map_or(t.clone(), |g| format!("#{g}")))
+        .collect()
+}
+
+/// EMERGENT reference resolution for oracle manufacturing. Returns the SINGLE library op
+/// whose operation-word signature ([`operation_signature`]) equals the prompt's AND whose
+/// parameter shape equals `want_param_types` (the candidate's own signature) — or, first,
+/// the unique op the prompt spells as an ACRONYM (gcd <- "greatest common divisor"). The
+/// operation-word equality is the completeness gate: it demands the prompt name this op and
+/// NOTHING more, so "sum of SQUARES" (extra `square`), "SECOND largest" (extra `second`),
+/// and "reverse then SORT" (two ops) all miss — a modified/compositional intent resolves to
+/// no single reference. Container/type wording is dropped from the operation words, so the
+/// SHAPE filter disambiguates ops that share operation words but differ in type
+/// (`reverse a LIST` -> `reverse_list`, not `reverse_string`/`reverse_number`). Ambiguity
+/// (two ops match) or no match returns None. The returned op's `.mog` is the VERIFIED
+/// reference a candidate is differentially checked against to confirm a bare-NL guess.
+pub fn reference_for(prompt: &str, want_param_types: &[String]) -> Option<&'static LibOp> {
+    let shape_ok = |op: &LibOp| op_sig_types(op.mog).0 == want_param_types;
+    // ACRONYM first: a spelled-out name is a stronger, more specific signal than a
+    // coincidental token overlap (mirrors [`declare`]).
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let acro: Vec<&'static LibOp> = OPS
+        .iter()
+        .filter(|op| {
+            let toks = content_tokens(op.name);
+            toks.len() == 1 && is_acronym_of(&toks[0], &words) && shape_ok(op)
+        })
+        .collect();
+    if acro.len() == 1 {
+        return Some(acro[0]);
+    }
+    let want = operation_signature(prompt);
+    if want.is_empty() {
+        return None;
+    }
+    let mut hit: Option<&'static LibOp> = None;
+    for op in OPS {
+        if shape_ok(op) && operation_signature(op.name) == want {
+            if hit.is_some() {
+                return None; // two same-shape ops share the signature -> ambiguous -> refuse
+            }
+            hit = Some(op);
+        }
+    }
+    hit
+}
+
+/// The SINGLE library op whose operation-word signature ([`operation_signature`]) EXACTLY
+/// equals the prompt's, for ANY parameter shape. Unlike [`reference_for`] this does not filter
+/// by a candidate's parameter types — it answers "does the prompt name exactly ONE complete
+/// operation, and nothing more?" A unique hit means the prompt is a SINGLE-OP request and a
+/// 2-op composition MUST NOT preempt it: `count_positives` alone fully explains "count how
+/// many elements are positive" (op-words {count, positive}); the type-compatible chain
+/// `is_positive(count_positives(x))` merely double-counts the shared `positive` token and is
+/// behaviorally wrong. The operation-word set-equality is the completeness gate — a genuinely
+/// compositional prompt ("reverse then uppercase" -> {reverse, upper}) matches no single op and
+/// returns None, so real compositions still reach the composition tier. Ambiguity (>=2 ops
+/// share the signature, e.g. two shapes of the same op-words) or no exact match => None.
+pub fn sole_op_for_prompt(prompt: &str) -> Option<&'static LibOp> {
+    let want = operation_signature(prompt);
+    if want.is_empty() {
+        return None;
+    }
+    let mut hit: Option<&'static LibOp> = None;
+    for op in OPS {
+        if operation_signature(op.name) == want {
+            if hit.is_some() {
+                return None; // ambiguous -> defer to the gated composition/refuse tiers
+            }
+            hit = Some(op);
+        }
+    }
+    hit
 }
 
 /// Run an op on a few illustrative inputs so a user can confirm the behavior by
@@ -1423,6 +1770,36 @@ mod tests {
 
     fn routed_name(prompt: &str) -> Option<&'static str> {
         route(prompt).map(|r| r.op.name)
+    }
+
+    #[test]
+    fn reference_for_resolves_exact_single_op_and_refuses_modified_intent() {
+        // Emergent oracle reference: the prompt's operation-word signature must match one op's
+        // (container/generic/framing dropped, synonyms canonicalized) AND the op's parameter
+        // shape must equal the candidate's — the shape filter disambiguates ops that share
+        // operation words but differ in type.
+        let seq = &["[i64]".to_string()];
+        let scalar2 = &["i64".to_string(), "i64".to_string()];
+        let string1 = &["string".to_string()];
+        let name = |p: &str, sig: &[String]| reference_for(p, sig).map(|o| o.name);
+        // `reverse_list`, not `reverse_string`/`reverse_number`, via the [i64] shape.
+        assert_eq!(name("reverse a list", seq), Some("reverse_list"));
+        // container mismatch (list vs array) is ignored on the operation words -> `array_sum`.
+        assert_eq!(name("the sum of a list of numbers", seq), Some("array_sum"));
+        assert_eq!(name("the minimum element in a list", seq), Some("list_min"));
+        assert_eq!(name("count the vowels in a string", string1), Some("count_vowels"));
+        // "ascending"/"order" are sort synonyms -> plain `sort` still resolves.
+        assert_eq!(name("sort a list in ascending order", seq), Some("sort"));
+        // acronym path (two scalar args).
+        assert_eq!(name("greatest common divisor of two numbers", scalar2), Some("gcd"));
+        // A modified intent resolves to its OWN op when one exists (set-equality, not a
+        // simpler-op fallback): "sum of squares" -> `sum_of_squares`, NOT plain `array_sum`.
+        assert_eq!(name("the sum of the squares of a list", seq), Some("sum_of_squares"));
+        assert_eq!(name("the second largest element in a list", seq), Some("second_largest"));
+        // When NO op captures the full intent, refuse (stays tentative) — never a
+        // wrong-simpler-op: set-equality can't map these onto `array_sum`/`sort`.
+        assert!(name("the sum of the cubes of a list", seq).is_none()); // no sum-of-cubes-list op
+        assert!(name("reverse then sort a list", seq).is_none()); // two operations, no combined op
     }
 
     #[test]
@@ -2202,6 +2579,60 @@ mod tests {
     }
 
     #[test]
+    fn named_distilled_op_routes_via_name() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // The bundled distilled `nth_prime` (flywheel-taught) must route via NAME —
+        // "the nth prime number" shares tokens {nth, prime} with the op's fn name — instead
+        // of refusing as an un-named behavioural match. 5 distinct points (above the floor).
+        let exs = vec![ex(1, 2), ex(2, 3), ex(3, 5), ex(5, 11), ex(10, 29)];
+        let a = answer("the nth prime number", &exs);
+        let code = match &a {
+            Answer::Synthesized { code, .. } | Answer::Library { code, .. } => code.clone(),
+            _ => panic!("named distilled nth_prime should route (got refusal/other tier)"),
+        };
+        // ...and GENERALIZE: the 7th prime is 17, never shown to the router.
+        assert!(
+            crate::runtime::code_reproduces_examples(&code, &[ex(7, 17)]),
+            "routed nth_prime must be correct on a fresh input"
+        );
+    }
+
+    #[test]
+    fn fixpoint_tier_solves_definitional_digital_root() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // The digital root, described definitionally ("repeatedly sum the digits ... until a
+        // single digit") — the prompt never NAMES the op. The fixpoint tier resolves the
+        // operation phrase "sum the digits" -> sum_of_digits and iterates to its fixpoint.
+        let exs = vec![ex(0, 0), ex(38, 2), ex(123, 6), ex(9999, 9), ex(10, 1)];
+        let a = answer(
+            "repeatedly sum the digits of a number until a single digit remains",
+            &exs,
+        );
+        let code = match &a {
+            Answer::Synthesized { code, .. } | Answer::Library { code, .. } => code.clone(),
+            _ => panic!("definitional digital root should solve via the fixpoint tier"),
+        };
+        // Generalizes: digital_root(77) = 7+7=14 -> 1+4 = 5, never shown.
+        assert!(crate::runtime::code_reproduces_examples(&code, &[ex(77, 5)]));
+    }
+
+    #[test]
+    fn partial_name_overlap_on_thin_examples_refuses() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // A learned op sharing a NAME token ("square" in digit_sum_of_square) can reproduce a
+        // few degenerate points while computing a different function. The distinct-example
+        // floor must refuse — never confidently ship a partial-name coincidence.
+        let thin = vec![ex(0, 0), ex(1, 1), ex(0, 0)];
+        assert!(
+            matches!(answer("the square of a number", &thin), Answer::Refused),
+            "partial-name learned match on <4 distinct scalar points must refuse"
+        );
+    }
+
+    #[test]
     fn behaviour_composition_reaches_a_pipeline_naming_neither_op() {
         use crate::benchmark::{Example, Value};
         let av = |a: &[i64]| Value::int_array(a);
@@ -2268,6 +2699,37 @@ mod tests {
         assert!(code.contains("to_upper(reverse_string"), "chain must be reverse THEN upper");
         // Single-op prompt names only one op -> no chain.
         assert!(declare_composed("reverse a string").is_none());
+    }
+
+    #[test]
+    fn sole_op_wins_over_spurious_composition_for_single_op_prompt() {
+        // DEFECT A/B regression: "count how many elements are positive" is a SINGLE-OP request
+        // (`count_positives`). The bare-NL composition tier used to prefer the type-compatible
+        // chain is_positive(count_positives(x)) — which returns 0/1, not the count — and label
+        // it a confident success. The correct single op must win.
+        let prompt = "count how many elements are positive";
+        // The prompt's operation-word signature resolves to exactly one op.
+        assert_eq!(sole_op_for_prompt(prompt).map(|o| o.name), Some("count_positives"));
+        // A genuinely compositional prompt still names no single op -> stays available to the
+        // composition tier.
+        assert!(sole_op_for_prompt("reverse then uppercase a string").is_none());
+        // The bare-NL composition tier must REFUSE to build a chain for the single-op prompt.
+        assert!(
+            declare_composed(prompt).is_none(),
+            "composition tier must not preempt the correct single op"
+        );
+        // End-to-end: answer() with NO examples returns the single op, not a wrong chain.
+        match answer(prompt, &[]) {
+            Answer::Library { name, .. } => assert_eq!(name, "count_positives"),
+            other => panic!(
+                "expected the single op count_positives, got {}",
+                match other {
+                    Answer::Composition { code } => format!("composition:\n{code}"),
+                    Answer::Refused => "refused".to_string(),
+                    _ => "other".to_string(),
+                }
+            ),
+        }
     }
 
     #[test]
