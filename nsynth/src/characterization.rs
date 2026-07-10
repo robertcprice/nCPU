@@ -191,6 +191,18 @@ pub fn infer_rust_signature(fn_name: &str, examples: &[CharExample]) -> Option<S
     ))
 }
 
+/// Type-correct default body so the scaffold COMPILES (tests fail → hole-filler
+/// has a gradient). Empty `{}` is illegal for non-() returns in Rust.
+pub fn default_body_for_examples(examples: &[CharExample]) -> &'static str {
+    match examples.first().map(|e| &e.expected) {
+        Some(CharValue::Int(_)) => "0",
+        Some(CharValue::Bool(_)) => "false",
+        Some(CharValue::Str(_)) => "String::new()",
+        Some(CharValue::IntList(_)) => "Vec::new()",
+        None => "()",
+    }
+}
+
 /// Emit a `#[cfg(test)]` module that pins the given examples (one test per row).
 pub fn emit_characterization_tests(fn_name: &str, examples: &[CharExample]) -> String {
     let mut tests = String::new();
