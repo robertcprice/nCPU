@@ -237,6 +237,19 @@ pub fn nl_synthesis_proposer_with_run(
 ) -> Result<crate::agent::repo::RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
 
+    // EXTRACT-HELPER refactor (Lever D): a Refactor task "extract ... into a helper called X"
+    // is a structural, behaviour-preserving edit (hoist a repeated pure-i64 sub-expression into a
+    // new fn + rewrite call sites). Run it FIRST, before synthesis: it declines cleanly on any
+    // non-extract prose or unclear free-variable analysis, and the real cargo-test oracle still
+    // gates behaviour preservation.
+    if matches!(task.kind, crate::agent::repo::RepoTaskKind::Refactor) {
+        if let Some(patch) =
+            crate::agent::synthesis_proposer::try_extract_helper_patch(context, &description)
+        {
+            return Ok(patch);
+        }
+    }
+
     // Primary path: genuine verified synthesis (bridge + solver), generalizing
     // to any demonstrated function (registry op or inline I/O examples) rather
     // than the canned keyword shapes. Real synthesis *is* a synthesis candidate,

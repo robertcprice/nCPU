@@ -7,7 +7,7 @@
 use crate::agent::agent_run::AgentRun;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{
-    FailureAnalysis, FailureKind, RepairContext, RepairEdit, RepairPatch, RepoTaskSpec,
+    FailureAnalysis, FailureKind, RepairContext, RepairEdit, RepairPatch, RepoTaskKind, RepoTaskSpec,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,16 @@ pub fn nl_synthesis_proposer(
     // reason.
     if let Some(patch) = try_add_param_patch(context, &description) {
         return Ok(patch);
+    }
+
+    // EXTRACT-HELPER refactor (Lever D): "extract the duplicated expression into a helper called
+    // X" hoists a repeated pure-i64 sub-expression into `fn X(..) -> i64` and rewrites call sites.
+    // Structural like rename/add-param, so it is hoisted above the body-swap synthesis stages; it
+    // only fires on an explicit extract instruction for a Refactor task and declines otherwise.
+    if matches!(task.kind, RepoTaskKind::Refactor) {
+        if let Some(patch) = try_extract_helper_patch(context, &description) {
+            return Ok(patch);
+        }
     }
 
     if let Some(patch) = try_emergent_synthesis_patch(task, context, &description, analysis) {
@@ -1367,6 +1377,271 @@ fn replace_word(line: &str, old: &str, new: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// LEVER D — extract-helper refactor (conservative, sound, string-level).
+///
+/// Parses `extract ... into [a] [helper|function] [called|named] <NAME>`, finds a NON-TRIVIAL
+/// exact-duplicated PARENTHESISED integer-arithmetic expression `(E)` occurring >=2 times in ONE
+/// repo fn body, and hoists it into `fn <NAME>(<free i64 locals>) -> i64 { E }`, replacing every
+/// `(E)` occurrence with a call. Behaviour-preservation is gated downstream by the real cargo test.
+///
+/// SOUND-BY-CONSTRUCTION scope (declines otherwise — never emits wrong code):
+///   - Only PURE i64 arithmetic expressions: every char in `E` is an identifier, an integer
+///     literal, whitespace, or one of `+ - * / % ( )`. No calls / indexing / method calls /
+///     comparisons — so `E` is provably `i64` and the helper's return type is KNOWN.
+///   - Every free identifier in `E` must be a KNOWN `i64` param or `let NAME: i64` local of the
+///     fn. Any unknown identifier (a const, a non-`i64` local, a call target) → DECLINE (the free-
+///     variable / type analysis is unclear, so we refuse rather than guess).
+///   - The expression must be genuinely duplicated (>=2 identical `(E)` groups) and non-trivial
+///     (contains an arithmetic operator and >=1 free variable).
+///
+/// Full syn-AST extraction (arbitrary types, non-parenthesised spans, statement hoisting) is the
+/// documented FOLLOW-UP; this covers the common "hoist a repeated arithmetic sub-expression" case.
+pub fn try_extract_helper_patch(context: &RepairContext, description: &str) -> Option<RepairPatch> {
+    let name = parse_extract_helper_name(description)?;
+    // Collision guard: never shadow an existing fn (would be an E0428 or a silent capture).
+    let defined: Vec<String> = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .flat_map(|f| defined_fn_names(f.text.as_deref().unwrap_or("")))
+        .collect();
+    if defined.iter().any(|d| *d == name) {
+        return None;
+    }
+
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("");
+        // Operate only on the code BEFORE the first test module — the oracle is never edited.
+        let split = text.find("#[cfg(test)]").unwrap_or(text.len());
+        let (prefix, suffix) = text.split_at(split);
+        for (fn_name, fn_text) in split_top_level_functions(prefix) {
+            let Some(body) = fn_body(&fn_text) else {
+                continue;
+            };
+            let known = known_i64_names(&fn_text, &fn_name, &body);
+            let Some((paren_expr, free_vars)) = find_duplicated_i64_expr(&body, &known) else {
+                continue;
+            };
+            let params =
+                free_vars.iter().map(|v| format!("{v}: i64")).collect::<Vec<_>>().join(", ");
+            let inner = paren_expr[1..paren_expr.len() - 1].trim();
+            let helper = format!("fn {name}({params}) -> i64 {{ {inner} }}");
+            let call = format!("{name}({})", free_vars.join(", "));
+            let new_body = body.replace(&paren_expr, &call);
+            if new_body == body {
+                continue;
+            }
+            let new_prefix = replace_body_only(prefix, &fn_name, &new_body).ok()?;
+            let with_helper = insert_before_fn_def(&new_prefix, &fn_name, &helper);
+            let new_text = format!("{with_helper}{suffix}");
+            if new_text == text {
+                continue;
+            }
+            return Some(
+                RepairPatch::new()
+                    .with_edit(RepairEdit::new(
+                        file.path.clone(),
+                        text.to_string(),
+                        new_text,
+                        format!("extract-helper refactor: hoist duplicated `{paren_expr}` into fn {name}"),
+                    ))
+                    .with_metadata("proposer", "nl_extract_helper")
+                    .with_metadata("helper_name", name.clone()),
+            );
+        }
+    }
+    None
+}
+
+/// Parse the helper NAME from an "extract ... into [a] [helper|function] [called|named] <NAME>"
+/// instruction. Requires both an `extract` token AND a `helper`/`function` token so plain prose
+/// never triggers it. NAME follows `called`/`named` when present, else the token after
+/// `helper`/`function`. Returns `None` if no clean identifier name is found.
+fn parse_extract_helper_name(description: &str) -> Option<String> {
+    let toks: Vec<&str> = description
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .collect();
+    let lower_toks: Vec<String> = toks.iter().map(|t| t.to_lowercase()).collect();
+    if !lower_toks.iter().any(|t| t == "extract") {
+        return None;
+    }
+    if !lower_toks.iter().any(|t| t == "helper" || t == "function") {
+        return None;
+    }
+    let name = if let Some(p) = lower_toks.iter().rposition(|t| t == "called" || t == "named") {
+        toks.get(p + 1).copied()
+    } else {
+        let p = lower_toks.iter().position(|t| t == "helper" || t == "function")?;
+        toks.get(p + 1).copied()
+    }?;
+    if !is_plain_ident(name) {
+        return None;
+    }
+    const FILLER: &[&str] =
+        &["a", "an", "the", "it", "into", "helper", "function", "called", "named", "this", "that"];
+    if FILLER.contains(&name.to_lowercase().as_str()) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Names in the fn known to be exactly `i64`: params typed `i64` plus `let [mut] NAME: i64 = ...`
+/// locals. Used to decide which identifiers in a candidate expression are free `i64` variables.
+fn known_i64_names(
+    fn_text: &str,
+    fn_name: &str,
+    body: &str,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(params) = fn_header_params(fn_text, fn_name) {
+        let idents = parse_param_idents(&params);
+        let types = parse_param_types(&params);
+        for (n, t) in idents.iter().zip(types.iter()) {
+            if t.trim() == "i64" {
+                set.insert(n.clone());
+            }
+        }
+    }
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("let ") {
+            let rest = rest.trim();
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            if let Some((name, ty_and)) = rest.split_once(':') {
+                let name = name.trim();
+                let ty = ty_and.split('=').next().unwrap_or("").trim();
+                if ty == "i64" && is_plain_ident(name) {
+                    set.insert(name.to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
+/// True for a plain Rust identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+fn is_plain_ident(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Every balanced `(...)` group (full text, parens included) in `s`, including nested groups.
+fn balanced_paren_groups(s: &str) -> Vec<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    for i in 0..b.len() {
+        if b[i] == b'(' {
+            let mut depth = 0i32;
+            for j in i..b.len() {
+                match b[j] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            out.push(s[i..=j].to_string());
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+/// If `paren_expr` (a full `(E)` group) is a PURE `i64` arithmetic expression whose every free
+/// identifier is in `known`, return its free variables in first-appearance order. Otherwise `None`
+/// — declining calls, indexing, comparisons, casts, unknown identifiers, or trivial (operator-free)
+/// expressions, so the extracted helper's `-> i64` return type is always provably correct.
+fn qualify_i64_expr(
+    paren_expr: &str,
+    known: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    if paren_expr.len() < 2 {
+        return None;
+    }
+    let inner = &paren_expr[1..paren_expr.len() - 1];
+    // Char whitelist: identifiers, digits, whitespace, and pure-arithmetic operators only.
+    if !inner
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c.is_whitespace() || "+-*/%()".contains(c))
+    {
+        return None;
+    }
+    // Must contain at least one arithmetic operator (non-trivial: not a bare `(x)`).
+    if !inner.chars().any(|c| "+-*/%".contains(c)) {
+        return None;
+    }
+    let bytes = inner.as_bytes();
+    let mut free: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            let ident = &inner[start..i];
+            // A call target (`ident(`) is unsupported — return type unknown → decline.
+            if inner[i..].trim_start().starts_with('(') {
+                return None;
+            }
+            if known.contains(ident) {
+                if !free.iter().any(|f| f == ident) {
+                    free.push(ident.to_string());
+                }
+            } else {
+                // Unknown identifier (const / non-i64 local / keyword) → decline.
+                return None;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    if free.is_empty() {
+        return None;
+    }
+    Some(free)
+}
+
+/// The best duplicated, qualifying `(E)` group in `body`: the one appearing the most times
+/// (>=2), tie-broken by longest text. Returns `(paren_expr, free_vars)` or `None`.
+fn find_duplicated_i64_expr(
+    body: &str,
+    known: &std::collections::HashSet<String>,
+) -> Option<(String, Vec<String>)> {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for g in balanced_paren_groups(body) {
+        *counts.entry(g).or_insert(0) += 1;
+    }
+    let mut best: Option<(String, usize, Vec<String>)> = None;
+    for (text, count) in counts {
+        if count < 2 {
+            continue;
+        }
+        let Some(free) = qualify_i64_expr(&text, known) else {
+            continue;
+        };
+        let better = match &best {
+            None => true,
+            Some((bt, bc, _)) => count > *bc || (count == *bc && text.len() > bt.len()),
+        };
+        if better {
+            best = Some((text, count, free));
+        }
+    }
+    best.map(|(t, _, f)| (t, f))
 }
 
 /// CONTENT-based localization: which repo fn does the description talk about?
@@ -3011,6 +3286,136 @@ mod tests {
             new.contains("take_top_reorder_impl(xs.to_vec(), k)"),
             "slice repo param must be bridged with .to_vec() in the reordered call: {new}"
         );
+    }
+
+    // ---- Lever D: extract-helper refactor ----
+
+    #[test]
+    fn extract_helper_name_parses_and_declines() {
+        assert_eq!(
+            parse_extract_helper_name("extract the duplicated expression into a helper called top"),
+            Some("top".to_string())
+        );
+        assert_eq!(
+            parse_extract_helper_name("extract it into a function named area"),
+            Some("area".to_string())
+        );
+        // No helper/function token → not an extract-helper instruction.
+        assert_eq!(parse_extract_helper_name("extract the value into top"), None);
+        // No extract token at all.
+        assert_eq!(parse_extract_helper_name("make a helper called top"), None);
+        // Name would be a filler word → decline.
+        assert_eq!(parse_extract_helper_name("extract into a helper called it"), None);
+    }
+
+    #[test]
+    fn qualify_i64_expr_accepts_pure_arith_declines_calls_and_unknowns() {
+        let mut known = std::collections::HashSet::new();
+        known.insert("a".to_string());
+        known.insert("b".to_string());
+        known.insert("c".to_string());
+        // Pure i64 arithmetic, free vars in first-appearance order (deduped).
+        assert_eq!(
+            qualify_i64_expr("(a * b + c)", &known),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        assert_eq!(qualify_i64_expr("(a * a)", &known), Some(vec!["a".to_string()]));
+        // A call target → unknown return type → decline.
+        assert_eq!(qualify_i64_expr("(f(a) + b)", &known), None);
+        // Unknown identifier (not a known i64 local) → decline.
+        assert_eq!(qualify_i64_expr("(a + z)", &known), None);
+        // Comparison / non-arithmetic char → decline (would not be i64).
+        assert_eq!(qualify_i64_expr("(a < b)", &known), None);
+        // Trivial (no operator) → decline.
+        assert_eq!(qualify_i64_expr("(a)", &known), None);
+    }
+
+    /// END TO END structural: a repo fn with a duplicated pure-i64 expression + an "extract it into
+    /// a helper called <NAME>" Refactor instruction yields a patch that ADDS `fn <NAME>` and
+    /// replaces >=2 occurrences with a call — the repo signature and test module untouched.
+    #[test]
+    fn extract_helper_hoists_duplicated_expression() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_extract_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"ex\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // `(a * b + c)` is duplicated across two lets; both must become `top(a, b, c)`.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn score(a: i64, b: i64, c: i64) -> i64 {\n    let x = (a * b + c);\n    let y = (a * b + c);\n    x + y\n}\n\n#[cfg(test)]\nmod tests {\n    use super::score;\n    #[test]\n    fn t() {\n        assert_eq!(score(2, 3, 1), 14);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "ex".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: extract the duplicated expression into a helper called top".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_extract_helper_patch(
+            &context,
+            "extract the duplicated expression into a helper called top",
+        )
+        .expect("extract-helper must hoist the duplicated expression");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "nl_extract_helper"),
+            "extract-helper proposer must own the patch: {:?}",
+            patch.metadata
+        );
+        let edit = patch.edits.iter().find(|e| e.path == "src/lib.rs").expect("edit lib.rs");
+        assert!(edit.new_text.contains("fn top(a: i64, b: i64, c: i64) -> i64"), "{}", edit.new_text);
+        assert!(
+            edit.new_text.matches("top(a, b, c)").count() >= 2,
+            ">=2 call sites must replace the duplicated expression: {}",
+            edit.new_text
+        );
+        assert!(
+            !edit.new_text.contains("(a * b + c)"),
+            "the duplicated literal expression must be gone from the body: {}",
+            edit.new_text
+        );
+        // The test module (oracle) is untouched.
+        assert!(edit.new_text.contains("assert_eq!(score(2, 3, 1), 14);"), "{}", edit.new_text);
+        // Ignore the task binding (kind-guard is exercised by the supervisor); silence unused.
+        let _ = &task;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Declines when the duplicated expression references an UNKNOWN (non-i64) local — the free-
+    /// variable / type analysis is unclear, so no patch is emitted rather than wrong code.
+    #[test]
+    fn extract_helper_declines_when_analysis_unclear() {
+        let root = std::env::temp_dir().join(format!("nsynth_extract_dec_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"exd\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // `s` is a String local (untyped-annotation, non-i64): the duplicated `(s.len() + a)`
+        // contains a method call and an unknown local → must decline.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn f(a: i64) -> usize {\n    let s = String::new();\n    let x = (s.len() + a as usize);\n    let y = (s.len() + a as usize);\n    x + y\n}\n",
+        )
+        .expect("lib.rs");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        assert!(
+            try_extract_helper_patch(&context, "extract it into a helper called g").is_none(),
+            "must decline on unclear (non-i64 / method-call) free-variable analysis"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Array-OUTPUT repo fn via the front door: "reverse a list" (`Vec<i64> -> Vec<i64>`) is a
