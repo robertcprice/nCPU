@@ -22,14 +22,16 @@
 //! Scope of this slice (intentionally minimal but *real*):
 //!   * Output types ScalarInt / ArrayInt / Str / Bool, inferred from the
 //!     problem signature ([`Utype`]).
-//!   * An OE table over the example outputs of array-valued candidates.
+//!   * An OE / example-match filter over **scalar** outputs of array programs
+//!     (transform layers + reduce).
 //!   * A bottom-up enumerator for the `ArrayInt` intermediate type that builds
 //!     the same class the legacy array path covers: identity, an element-wise
 //!     affine / abs / square map, sort, reverse, prefix-sum, and a predicate
-//!     filter — each then reduced to the scalar output and emitted as Mog
-//!     source.
+//!     filter — each then reduced via sum / max / min / count and emitted as
+//!     Mog source.
 //!   * Acceptance via [`verify_problem_code_strict`]; the first verified
-//!     candidate wins.
+//!     candidate wins (all example-matching programs are tried cheapest-first
+//!     so Sum/Count collisions on examples can still pass holdouts).
 //!
 //! Out of scope for now (next phase — tracked in the docs): higher-order
 //! combinators whose lambdas are themselves synthesized, scalar/string/tree
@@ -214,11 +216,41 @@ enum Ordering {
     Reverse,
 }
 
+/// Scalar reduction over the transformed array (Phase A parity with native_array).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reduce {
+    Sum,
+    Max,
+    Min,
+    Count,
+}
+
+impl Reduce {
+    fn label(self) -> &'static str {
+        match self {
+            Reduce::Sum => "sum",
+            Reduce::Max => "max",
+            Reduce::Min => "min",
+            Reduce::Count => "count",
+        }
+    }
+
+    fn apply(self, arr: &[i64]) -> i64 {
+        match self {
+            Reduce::Sum => arr.iter().copied().fold(0i64, i64::saturating_add),
+            Reduce::Max => arr.iter().copied().max().unwrap_or(0),
+            Reduce::Min => arr.iter().copied().min().unwrap_or(0),
+            Reduce::Count => arr.len() as i64,
+        }
+    }
+}
+
 /// One fully-formed array program, built bottom-up by stacking layers:
 ///   1. `pred`  — a predicate filter
 ///   2. `map`   — an element-wise map
 ///   3. `order` — a reordering (sort / reverse / none)
 ///   4. `prefix` — an optional running prefix-sum scan
+///   5. `reduce` — scalar fold (sum / max / min / count)
 ///
 /// Treating `order` and `prefix` as *separate* stacked layers (rather than one
 /// fused reshape) is what lets the order-invariance of a plain sum be broken:
@@ -230,6 +262,7 @@ struct ArrayProgram {
     map: ElemMap,
     order: Ordering,
     prefix: bool,
+    reduce: Reduce,
 }
 
 impl ArrayProgram {
@@ -258,6 +291,11 @@ impl ArrayProgram {
         out
     }
 
+    /// Scalar result after transform + reduce (OE signature for Phase A).
+    fn eval_scalar(&self, input: &[i64]) -> i64 {
+        self.reduce.apply(&self.eval(input))
+    }
+
     /// A rough size / cost used to keep the cheapest representative in the OE
     /// table and to bias enumeration toward simpler programs.
     fn cost(&self) -> usize {
@@ -277,7 +315,12 @@ impl ArrayProgram {
             1
         };
         let prefix_cost = self.prefix as usize;
-        pred_cost + map_cost + order_cost + prefix_cost
+        let reduce_cost = match self.reduce {
+            Reduce::Sum => 0, // default / cheapest
+            Reduce::Count => 1,
+            Reduce::Max | Reduce::Min => 1,
+        };
+        pred_cost + map_cost + order_cost + prefix_cost + reduce_cost
     }
 
     /// A short label naming the layers this program stacked, used as the method
@@ -296,6 +339,9 @@ impl ArrayProgram {
         if self.prefix {
             parts.push("prefix_sum");
         }
+        if !matches!(self.reduce, Reduce::Sum) {
+            parts.push(self.reduce.label());
+        }
         if parts.is_empty() {
             // Pure element-wise map (or identity) reduced to a sum.
             "map".to_string()
@@ -305,9 +351,7 @@ impl ArrayProgram {
     }
 
     /// Emit Mog source for `fn {fn_name}(arr: [i64]) -> i64` that builds the
-    /// transformed array and returns its sum. The slice's "array transform set"
-    /// is observed through this scalar reduction (the only output type the
-    /// benchmark array problems expose).
+    /// transformed array and returns its reduced scalar.
     fn emit(&self, fn_name: &str) -> String {
         let mut body = String::new();
         body.push_str(&format!("fn {fn_name}(arr: [i64]) -> i64 {{\n"));
@@ -366,12 +410,47 @@ impl ArrayProgram {
             body.push_str("    a = p;\n");
         }
 
-        // 4. Reduce the working array to the scalar output by summing.
-        body.push_str("    total: i64 = 0;\n");
-        body.push_str("    for item in a {\n");
-        body.push_str("        total = total + item;\n");
-        body.push_str("    }\n");
-        body.push_str("    return total;\n");
+        // 4. Reduce the working array to the scalar output.
+        match self.reduce {
+            Reduce::Sum => {
+                body.push_str("    total: i64 = 0;\n");
+                body.push_str("    for item in a {\n");
+                body.push_str("        total = total + item;\n");
+                body.push_str("    }\n");
+                body.push_str("    return total;\n");
+            }
+            Reduce::Count => {
+                body.push_str("    return a.len;\n");
+            }
+            Reduce::Max => {
+                body.push_str("    if a.len == 0 {\n");
+                body.push_str("        return 0;\n");
+                body.push_str("    }\n");
+                body.push_str("    best: i64 = a[0];\n");
+                body.push_str("    i: i64 = 1;\n");
+                body.push_str("    while i < a.len {\n");
+                body.push_str("        if a[i] > best {\n");
+                body.push_str("            best = a[i];\n");
+                body.push_str("        }\n");
+                body.push_str("        i = i + 1;\n");
+                body.push_str("    }\n");
+                body.push_str("    return best;\n");
+            }
+            Reduce::Min => {
+                body.push_str("    if a.len == 0 {\n");
+                body.push_str("        return 0;\n");
+                body.push_str("    }\n");
+                body.push_str("    best: i64 = a[0];\n");
+                body.push_str("    i: i64 = 1;\n");
+                body.push_str("    while i < a.len {\n");
+                body.push_str("        if a[i] < best {\n");
+                body.push_str("            best = a[i];\n");
+                body.push_str("        }\n");
+                body.push_str("        i = i + 1;\n");
+                body.push_str("    }\n");
+                body.push_str("    return best;\n");
+            }
+        }
         body.push_str("}\n");
         body
     }
@@ -404,18 +483,22 @@ fn enumerate_array_programs() -> Vec<ArrayProgram> {
         ElemPred::NonZero,
     ];
     let orders = [Ordering::None, Ordering::Sort, Ordering::Reverse];
+    let reduces = [Reduce::Sum, Reduce::Count, Reduce::Max, Reduce::Min];
 
     let mut programs = Vec::new();
     for &pred in &preds {
         for &map in &maps {
             for &order in &orders {
                 for &prefix in &[false, true] {
-                    programs.push(ArrayProgram {
-                        pred,
-                        map,
-                        order,
-                        prefix,
-                    });
+                    for &reduce in &reduces {
+                        programs.push(ArrayProgram {
+                            pred,
+                            map,
+                            order,
+                            prefix,
+                            reduce,
+                        });
+                    }
                 }
             }
         }
@@ -475,28 +558,30 @@ pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
     }
 
     let inputs = array_inputs(problem)?;
-
-    // Observational-equivalence table: signature (the per-example output
-    // vectors) -> cheapest array program producing it. Dedup happens here so we
-    // only emit + verify one representative per behaviour.
-    let mut oe: std::collections::HashMap<Vec<Vec<i64>>, ArrayProgram> =
-        std::collections::HashMap::new();
-
-    for program in enumerate_array_programs() {
-        let signature: Vec<Vec<i64>> = inputs.iter().map(|arr| program.eval(arr)).collect();
-        match oe.get(&signature) {
-            Some(existing) if existing.cost() <= program.cost() => continue,
-            _ => {
-                oe.insert(signature, program);
-            }
+    let mut expected: Vec<i64> = Vec::with_capacity(problem.examples.len());
+    for example in &problem.examples {
+        match &example.expected {
+            Value::Int(v) => expected.push(*v),
+            _ => return None,
         }
     }
 
-    // Order the deduped representatives cheapest-first, then emit + verify.
-    let mut representatives: Vec<ArrayProgram> = oe.into_values().collect();
-    representatives.sort_by_key(|p| p.cost());
+    // Keep EVERY program whose scalar outputs match the examples (cheapest
+    // first). Do not OE-collapse to a single cheapest program: Sum vs Count/Max
+    // can agree on the visible examples and diverge on holdouts — strict verify
+    // must be allowed to try each match.
+    let mut matching: Vec<ArrayProgram> = enumerate_array_programs()
+        .into_iter()
+        .filter(|program| {
+            inputs
+                .iter()
+                .zip(expected.iter())
+                .all(|(arr, &y)| program.eval_scalar(arr) == y)
+        })
+        .collect();
+    matching.sort_by_key(|p| p.cost());
 
-    for program in representatives {
+    for program in matching {
         let code = program.emit(fn_name);
         if verify_problem_code_strict(problem, &code).is_ok() {
             return Some(SolveResult {
@@ -757,6 +842,117 @@ mod tests {
             &[&[5, 5], &[10]],
             |arr| arr.iter().map(|x| x * 2).sum(),
         );
-        assert_solves(&problem, "affine");
+        assert_solves(&problem, "map");
+    }
+
+    #[test]
+    fn utbus_solves_array_max() {
+        let problem = array_problem(
+            "array_max",
+            "fn array_max(arr: [i64]) -> i64",
+            &[&[1, 5, 3], &[-2, -9, 0], &[7], &[4, 4, 1]],
+            &[&[10, -5, 2], &[1, 2, 3, 4]],
+            |arr| arr.iter().copied().max().unwrap_or(0),
+        );
+        assert_solves(&problem, "max");
+    }
+
+    #[test]
+    fn utbus_solves_array_min() {
+        let problem = array_problem(
+            "array_min",
+            "fn array_min(arr: [i64]) -> i64",
+            &[&[1, 5, 3], &[-2, -9, 0], &[7], &[4, 4, 1]],
+            &[&[10, -5, 2], &[1, 2, 3, 4]],
+            |arr| arr.iter().copied().min().unwrap_or(0),
+        );
+        assert_solves(&problem, "min");
+    }
+
+    #[test]
+    fn utbus_solves_count_positives() {
+        let problem = array_problem(
+            "count_positives",
+            "fn count_positives(arr: [i64]) -> i64",
+            &[&[-1, 2, -3, 4], &[-5, -1], &[1, 2, 3], &[0, 1, -1]],
+            &[&[10, -5, 2], &[-1, -2, -3]],
+            |arr| arr.iter().filter(|&&x| x > 0).count() as i64,
+        );
+        assert_solves(&problem, "count");
+    }
+
+    #[test]
+    fn eval_scalar_covers_all_reduces() {
+        let base = ArrayProgram {
+            pred: ElemPred::None,
+            map: ElemMap::Identity,
+            order: Ordering::None,
+            prefix: false,
+            reduce: Reduce::Sum,
+        };
+        let xs = [3i64, -1, 5, 0];
+        assert_eq!(
+            ArrayProgram {
+                reduce: Reduce::Sum,
+                ..base
+            }
+            .eval_scalar(&xs),
+            7
+        );
+        assert_eq!(
+            ArrayProgram {
+                reduce: Reduce::Max,
+                ..base
+            }
+            .eval_scalar(&xs),
+            5
+        );
+        assert_eq!(
+            ArrayProgram {
+                reduce: Reduce::Min,
+                ..base
+            }
+            .eval_scalar(&xs),
+            -1
+        );
+        assert_eq!(
+            ArrayProgram {
+                reduce: Reduce::Count,
+                ..base
+            }
+            .eval_scalar(&xs),
+            4
+        );
+        assert_eq!(
+            ArrayProgram {
+                pred: ElemPred::Positive,
+                reduce: Reduce::Count,
+                ..base
+            }
+            .eval_scalar(&xs),
+            2
+        );
+    }
+
+    #[test]
+    fn enumerate_includes_each_reduce() {
+        let programs = enumerate_array_programs();
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Sum));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Max));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Min));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Count));
+        // Plain max must be cheaper than filter+max of the same inputs' max.
+        let plain_max = programs
+            .iter()
+            .find(|p| {
+                matches!(p.reduce, Reduce::Max)
+                    && matches!(p.pred, ElemPred::None)
+                    && matches!(p.map, ElemMap::Identity)
+                    && matches!(p.order, Ordering::None)
+                    && !p.prefix
+            })
+            .expect("plain max");
+        assert_eq!(plain_max.cost(), 1);
+        assert_eq!(plain_max.label(), "max");
     }
 }

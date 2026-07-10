@@ -49,6 +49,114 @@ PY
 ( cd "$TMP/schema_miner" && cargo test --lib -q )
 echo "schema_miner: OK"
 
+echo "== utbus reduce standalone =="
+mkdir -p "$TMP/utbus_reduce/src"
+cat > "$TMP/utbus_reduce/Cargo.toml" <<'EOF'
+[package]
+name = "utbus_reduce_test"
+version = "0.1.0"
+edition = "2021"
+EOF
+cat > "$TMP/utbus_reduce/src/lib.rs" <<'EOF'
+//! Mirrors nsynth UTBUS Reduce::{Sum,Max,Min,Count} + eval_scalar contract
+//! so Phase A expand stays checkable without linguigenesis-core.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reduce { Sum, Max, Min, Count }
+
+impl Reduce {
+    fn apply(self, arr: &[i64]) -> i64 {
+        match self {
+            Reduce::Sum => arr.iter().copied().fold(0i64, i64::saturating_add),
+            Reduce::Max => arr.iter().copied().max().unwrap_or(0),
+            Reduce::Min => arr.iter().copied().min().unwrap_or(0),
+            Reduce::Count => arr.len() as i64,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Pred { All, Positive }
+
+fn transform(pred: Pred, input: &[i64]) -> Vec<i64> {
+    input.iter().copied().filter(|&x| match pred {
+        Pred::All => true,
+        Pred::Positive => x > 0,
+    }).collect()
+}
+
+fn eval_scalar(pred: Pred, reduce: Reduce, input: &[i64]) -> i64 {
+    reduce.apply(&transform(pred, input))
+}
+
+/// Cheapest-first matching: try all example matches (Sum may agree with Count
+/// on examples; holdouts would disambiguate in the real verifier).
+fn synthesize(examples: &[(Vec<i64>, i64)]) -> Option<(Pred, Reduce)> {
+    let cands = [
+        (Pred::All, Reduce::Sum),
+        (Pred::All, Reduce::Count),
+        (Pred::All, Reduce::Max),
+        (Pred::All, Reduce::Min),
+        (Pred::Positive, Reduce::Count),
+        (Pred::Positive, Reduce::Sum),
+    ];
+    cands.into_iter().find(|&(pred, reduce)| {
+        examples.iter().all(|(xs, y)| eval_scalar(pred, reduce, xs) == *y)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn array_max() {
+        let ex = vec![
+            (vec![1, 5, 3], 5),
+            (vec![-2, -9, 0], 0),
+            (vec![7], 7),
+        ];
+        let (pred, reduce) = synthesize(&ex).expect("max");
+        assert!(matches!(pred, Pred::All));
+        assert!(matches!(reduce, Reduce::Max));
+    }
+
+    #[test]
+    fn count_positives() {
+        let ex = vec![
+            (vec![-1, 2, -3, 4], 2),
+            (vec![-5, -1], 0),
+            (vec![1, 2, 3], 3),
+        ];
+        let (pred, reduce) = synthesize(&ex).expect("count+");
+        assert!(matches!(pred, Pred::Positive));
+        assert!(matches!(reduce, Reduce::Count));
+    }
+
+    #[test]
+    fn plain_sum_still_wins() {
+        let ex = vec![
+            (vec![1, 2, 3], 6),
+            (vec![0], 0),
+            (vec![-1, 1], 0),
+        ];
+        let (_, reduce) = synthesize(&ex).expect("sum");
+        assert!(matches!(reduce, Reduce::Sum));
+    }
+
+    #[test]
+    fn product_not_in_dsl() {
+        let ex = vec![
+            (vec![2, 3, 4], 24),
+            (vec![5, 5], 25),
+        ];
+        assert!(synthesize(&ex).is_none());
+    }
+}
+EOF
+( cd "$TMP/utbus_reduce" && cargo test --lib -q )
+echo "utbus_reduce: OK"
+
 if [[ -f "$ROOT/src/schema_component.rs" ]]; then
   echo "== schema_component note =="
   echo "(full schema_component e2e needs mog_synth + linguigenesis; skipped here)"
