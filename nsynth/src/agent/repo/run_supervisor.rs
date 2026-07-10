@@ -265,6 +265,22 @@ pub fn nl_synthesis_proposer_with_run(
         {
             return Ok(patch);
         }
+        // MODEL PRIOR before the overfit-prone from-scratch re-synthesis: a structure-preserving
+        // mutation just declined, so the fix is a genuine rewrite. With an asserts-only (under-
+        // determined) spec, the pure-example test-mined synthesis OVERFITS (measured: `parse_flag`
+        // collapsing to "has any uppercase char"), because it has no way to know the INTENDED
+        // function beyond the few points. A model carries a SEMANTIC PRIOR the examples lack, so
+        // consult it here — still cargo-gated downstream, so it never ships unverified (never-wrong
+        // preserved). INERT without NSYNTH_LOCAL_LLM_URL: try_model_repair_patch returns None when no
+        // model is served, so the deterministic (no-model) result is unchanged.
+        if let Some(patch) = crate::agent::synthesis_proposer::try_model_repair_patch(
+            task,
+            context,
+            &description,
+            analysis,
+        ) {
+            return Ok(patch);
+        }
     }
 
     // Primary path: genuine verified synthesis (bridge + solver), generalizing
