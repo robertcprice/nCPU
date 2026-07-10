@@ -167,6 +167,39 @@ fn fixtures() -> Vec<Case> {
                 .to_string(),
             "assert_eq!(fits(0, 0), true); assert_eq!(fits(3, 5), true); assert_eq!(fits(5, 4), false);",
         ),
+        // --- HARDER classes (deeper frontier map) ---
+        c(
+            "struct_field_swap",
+            "struct method reads the wrong field",
+            true,
+            "pub struct P { pub x: i64, pub y: i64 }\n\
+             impl P { pub fn first(&self) -> i64 { self.y } }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(P { x: 3, y: 7 }.first(), 3);\n  assert_eq!(P { x: 9, y: 1 }.first(), 9);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(P { x: 100, y: -5 }.first(), 100); assert_eq!(P { x: 0, y: 8 }.first(), 0);",
+        ),
+        c(
+            "loop_range_bound",
+            "exclusive range where inclusive is meant (sum 1..n vs 1..=n)",
+            true,
+            "pub fn tri(n: i64) -> i64 { let mut s = 0; let mut i = 1; while i < n { s += i; i += 1; } s }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(tri(4), 10);\n  assert_eq!(tri(5), 15);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(tri(1), 1); assert_eq!(tri(3), 6); assert_eq!(tri(6), 21);",
+        ),
+        c(
+            "helper_two_fn",
+            "the bug is in a helper the tested fn calls",
+            true,
+            "fn scale(v: i64) -> i64 { v * 3 }\n\
+             pub fn total(a: i64, b: i64) -> i64 { scale(a) + scale(b) }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(total(1, 2), 6);\n  assert_eq!(total(4, 0), 8);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(total(3, 3), 12); assert_eq!(total(0, 0), 0); assert_eq!(total(5, 5), 20);",
+        ),
         // --- CEILING: a coordinated multi-token rewrite. Model-free RE-SYNTHESIS from the 3 shown
         // asserts OVERFITS (it found "has any uppercase char", green on shown, wrong in general).
         // Held-out asserts expose it -> the honest ceiling where the model lane is actually needed.
