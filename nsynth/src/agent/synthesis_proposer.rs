@@ -185,20 +185,7 @@ pub fn try_real_synthesis_patch(
     // behavior) that would solve correctly — losing the solve AND making the ladder flaky.
     // Require the synthesized program to reproduce the mined I/O; if it can't (and there ARE
     // asserts to check), decline so the proven stages run. No asserts -> keep prior behavior.
-    let mined: Vec<crate::benchmark::Example> = {
-        let mut rows = Vec::new();
-        for f in &context.files {
-            if let Some(t) = f.text.as_deref() {
-                rows.extend(mine_asserts(t, &repo_fn));
-            }
-        }
-        rows.sort();
-        rows.dedup();
-        rows.into_iter()
-            .map(|(inputs, expected)| crate::benchmark::Example { inputs, expected })
-            .collect()
-    };
-    if !mined.is_empty() && !crate::runtime::code_reproduces_examples(&result.code, &mined) {
+    if !synthesis_reproduces_failing_asserts(context, &repo_fn, &result.code) {
         return None;
     }
     let synthesized = rust_code_for_repo_synthesis(&result.code);
@@ -2398,6 +2385,37 @@ fn front_door_mined_code(
 /// `assert_eq!(f(4), 8)` and `assert_eq!(8, f(4))` yield `([4], 8)`. Integer, string
 /// (`"abc"`), and boolean (`true`/`false`) literals are captured — the solver's
 /// verified domains; anything else (floats, expressions, method chains) is skipped.
+/// The shared "does this synthesized program actually satisfy the failing test?" gate. Mines the
+/// failing test's `assert_eq!` I/O for `repo_fn` and returns true iff the candidate reproduces
+/// EVERY one (or there are none to check). Each PROSE-GROUNDED synthesis stage (emergent / real)
+/// calls this before returning: it grounds via the low-confidence bridge on the intent's own
+/// examples — nothing about THIS repo's failing test — so without the gate a mis-grounding
+/// (count_positives->reverse-digits, mode->`last`, prefix-sums->`array_sum`) returns a wrong patch
+/// that, running early in the ladder, short-circuits the example-verified stages that would solve
+/// correctly (and makes the ladder flaky). Fail-closed on a mis-grounding; no asserts -> permissive.
+fn synthesis_reproduces_failing_asserts(
+    context: &RepairContext,
+    repo_fn: &str,
+    mog_code: &str,
+) -> bool {
+    let mut rows = Vec::new();
+    for f in &context.files {
+        if let Some(t) = f.text.as_deref() {
+            rows.extend(mine_asserts(t, repo_fn));
+        }
+    }
+    rows.sort();
+    rows.dedup();
+    if rows.is_empty() {
+        return true;
+    }
+    let exs: Vec<crate::benchmark::Example> = rows
+        .into_iter()
+        .map(|(inputs, expected)| crate::benchmark::Example { inputs, expected })
+        .collect();
+    crate::runtime::code_reproduces_examples(mog_code, &exs)
+}
+
 /// Name matching is word-boundary safe, so `add` never matches `add_two`.
 pub(crate) fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
     let mut out = Vec::new();
@@ -2439,9 +2457,13 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
         "false" => return Some(Value::Bool(false)),
         _ => {}
     }
-    // A bare `"..."` OR a String constructor around one: `"x".to_string()`, `"x".into()`,
-    // `String::from("x")`. Repo fns often take `String`, so their asserts wrap the literal.
-    let s = t.strip_suffix(".to_string()").or_else(|| t.strip_suffix(".into()")).unwrap_or(t);
+    // A bare `"..."` OR a String constructor around one: `"x".to_string()`, `"x".to_owned()`,
+    // `"x".into()`, `String::from("x")`. Repo fns often take `String`, so their asserts wrap it.
+    let s = t
+        .strip_suffix(".to_string()")
+        .or_else(|| t.strip_suffix(".to_owned()"))
+        .or_else(|| t.strip_suffix(".into()"))
+        .unwrap_or(t);
     let s = s.trim();
     let s = s
         .strip_prefix("String::from(")
@@ -2457,7 +2479,9 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
     // Int-array literal: `vec![1, 2, 3]` or `[1, 2, 3]` — the array domain the solver and op
     // library reason over. Needed to mine array-shaped asserts (`count_positives(vec![5,-2,3])`,
     // `reverse(vec![1,2])`); without it every array-in/array-out repo fn declined at mining.
+    // Also accept a slice literal `&[..]` (a common assert arg when the fn takes `&[i64]`).
     let arr = t.strip_prefix("vec!").map(str::trim).unwrap_or(t);
+    let arr = arr.strip_prefix('&').map(str::trim).unwrap_or(arr);
     if arr.starts_with('[') && arr.ends_with(']') {
         let inner = arr[1..arr.len() - 1].trim();
         if inner.is_empty() {
@@ -2604,6 +2628,13 @@ pub fn try_emergent_synthesis_patch(
     if !result.success {
         return None;
     }
+    // GATE against the failing test's asserts. This stage runs FIRST in the ladder and grounds via
+    // the low-confidence prose bridge; without this, a mis-grounding pre-empts the example-verified
+    // stages with a patch that doesn't actually satisfy the failing test (the dominant repo-repair
+    // failure mode). Decline when the synthesized program can't reproduce the mined I/O.
+    if !synthesis_reproduces_failing_asserts(context, &repo_fn, &result.code) {
+        return None;
+    }
     let synthesized = rust_code_for_repo_synthesis(&result.code);
     if !is_plain_rust_body(&synthesized) {
         return None;
@@ -2702,6 +2733,12 @@ pub fn try_emergent_addition_patch(
         f.path.ends_with(".rs")
             && file_defines_function(f.text.as_deref().unwrap_or(""), &fn_name)
     }) {
+        return None;
+    }
+    // GATE against the failing test's asserts for the fn being added: the test that references
+    // the missing fn IS its spec. A mis-grounded body would append a wrong fn that pre-empts the
+    // example-verified stages. Decline when the synthesized fn can't reproduce the mined I/O.
+    if !synthesis_reproduces_failing_asserts(context, &fn_name, &result.code) {
         return None;
     }
     // Target file: failure-implicated .rs > src/lib.rs > first .rs.
@@ -5481,6 +5518,43 @@ mod tests {
         assert!(
             try_real_synthesis_patch(&task, &context, "double a number").is_none(),
             "real-synthesis must decline a grounding that fails the failing test's asserts"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The shared prose-grounding gate (used by all three synthesis stages): a candidate that
+    /// reproduces the failing test's mined asserts passes; a mis-grounding is rejected; a fn with
+    /// no asserts is permissive. Deterministic — no bridge/solver in the loop.
+    #[test]
+    fn synthesis_gate_accepts_reproducing_rejects_mismatched() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_gate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn total(xs: Vec<i64>) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::total;\n    #[test]\n    fn t() {\n        assert_eq!(total(vec![1, 2, 3]), 6);\n        assert_eq!(total(vec![10, 20]), 30);\n        assert_eq!(total(vec![5]), 5);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let sum_mog = "fn total(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n    }\n    return s;\n}\n";
+        let max_mog = "fn total(arr: [i64]) -> i64 {\n    m: i64 = arr[0];\n    for e in arr {\n        if e > m {\n            m = e;\n        }\n    }\n    return m;\n}\n";
+        assert!(
+            synthesis_reproduces_failing_asserts(&context, "total", sum_mog),
+            "a sum reproduces the sum asserts -> gate passes"
+        );
+        assert!(
+            !synthesis_reproduces_failing_asserts(&context, "total", max_mog),
+            "a max does NOT reproduce the sum asserts -> gate rejects the mis-grounding"
+        );
+        assert!(
+            synthesis_reproduces_failing_asserts(&context, "no_such_fn", max_mog),
+            "no asserts for the fn -> permissive (prior behavior preserved)"
         );
         let _ = fs::remove_dir_all(&root);
     }
