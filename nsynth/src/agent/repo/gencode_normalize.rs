@@ -30,9 +30,13 @@ pub fn normalize_component(rust: &str) -> String {
     // BEFORE rewriting `.len`/index (those don't affect param-mutation detection
     // but we want a stable scan of the original body for the param signature).
     let mutated = mutated_value_params(rust);
-    // Rule 6 inputs: every by-value Vec param. `for x in arr` MOVES such a param,
-    // so any later `arr[..]`/`arr.len()` fails to borrow a moved value (E0382).
-    let vec_params = value_vec_params(rust);
+    // Rule 6 inputs: every by-value Vec param AND every local Vec binding. `for x in v`
+    // MOVES such a `v`, so any later `v[..]`/`v.len()`/`return v` fails to borrow a moved
+    // value (E0382). A LOCAL `let mut out: Vec<i64>` built then iterated then returned hits
+    // this exactly like a param (observed: array-building library ops — dedup — reshaped into
+    // a repo fn produced `for u in out` that moved the accumulator).
+    let mut vec_idents = value_vec_params(rust);
+    vec_idents.extend(value_vec_locals(rust, &vec_idents));
 
     let mut out_lines: Vec<String> = Vec::with_capacity(rust.lines().count());
     for line in rust.lines() {
@@ -57,8 +61,8 @@ pub fn normalize_component(rust: &str) -> String {
         // Rules 2 + 3: `.len` -> `.len()`, `IDENT[expr]` -> `IDENT[(expr) as usize]`.
         let rewritten = rewrite_len_property(&rewritten);
         let rewritten = rewrite_slice_index(&rewritten);
-        // Rule 6: borrow-iterate a by-value Vec param so it isn't moved.
-        let rewritten = rewrite_for_in_vec_param(&rewritten, &vec_params);
+        // Rule 6: borrow-iterate a by-value Vec param OR local so it isn't moved.
+        let rewritten = rewrite_for_in_vec_param(&rewritten, &vec_idents);
         out_lines.push(rewritten);
     }
     out_lines.join("\n")
@@ -250,6 +254,47 @@ fn value_vec_params(rust: &str) -> Vec<String> {
     names
 }
 
+/// Local `Vec` bindings whose elements are `Copy` (i64) — a typed `let [mut] IDENT: Vec<...> = ..`
+/// or a rebind `let [mut] IDENT = <already-known-vec>;`. Iterating one of these by value MOVES
+/// it, so a later use fails E0382 exactly like a by-value param; the rewriter borrow-iterates
+/// these too. `known` seeds the transitive closure (the params); two passes resolve
+/// `let b = a;` when `a` was a typed local seen later in source order.
+fn value_vec_locals(rust: &str, known: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut all: Vec<String> = known.to_vec();
+    for _ in 0..2 {
+        for line in rust.lines() {
+            let t = line.trim_start();
+            let Some(rest) = t.strip_prefix("let ") else { continue };
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            if let Some((name, ty)) = rest.split_once(':') {
+                // `IDENT: Vec<...> = ...`
+                let name = name.trim();
+                if ty.trim_start().starts_with("Vec<")
+                    && is_ident(name)
+                    && !all.contains(&name.to_string())
+                {
+                    found.push(name.to_string());
+                    all.push(name.to_string());
+                }
+            } else if let Some((name, rhs)) = rest.split_once('=') {
+                // `IDENT = <known-vec-ident>;` (a rebind, e.g. `let mut tmp = arr;`)
+                let name = name.trim();
+                let rhs = rhs.trim().trim_end_matches(';').trim();
+                if is_ident(name)
+                    && is_ident(rhs)
+                    && all.contains(&rhs.to_string())
+                    && !all.contains(&name.to_string())
+                {
+                    found.push(name.to_string());
+                    all.push(name.to_string());
+                }
+            }
+        }
+    }
+    found
+}
+
 /// Does the body mutate `name` (method-mutate or rebind)?
 fn param_is_mutated(rust: &str, name: &str) -> bool {
     for line in rust.lines() {
@@ -380,6 +425,25 @@ pub fn escape_module_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrow_iterates_local_vecs_used_after_the_loop() {
+        // `out` is a LOCAL Vec built, iterated, then returned; iterating it BY VALUE moves it
+        // (E0382 at `return out`). Normalize must borrow-iterate the local, not just params.
+        let src = "fn f(xs: Vec<i64>) -> Vec<i64> {\n    let mut out: Vec<i64> = Vec::new();\n    for x in xs {\n        out.push(x);\n    }\n    let mut seen: Vec<i64> = Vec::new();\n    for u in out {\n        seen.push(u);\n    }\n    return out;\n}\n";
+        let out = normalize_component(src);
+        assert!(out.contains("for u in out.iter().copied()"), "local Vec `out` must be borrow-iterated: {out}");
+        assert!(out.contains("for x in xs.iter().copied()"), "param Vec still borrow-iterated: {out}");
+    }
+
+    #[test]
+    fn borrow_iterates_a_rebound_local_vec() {
+        // `tmp` is a REBIND of the param `arr`; iterating it by value would move it before the
+        // later `tmp[..]`. The transitive-closure detection must borrow-iterate it.
+        let src = "fn g(arr: Vec<i64>) -> i64 {\n    let mut tmp = arr;\n    let mut s: i64 = 0;\n    for e in tmp {\n        s = s + e;\n    }\n    return tmp.len() as i64 + s;\n}\n";
+        let out = normalize_component(src);
+        assert!(out.contains("for e in tmp.iter().copied()"), "rebound local Vec `tmp` must be borrow-iterated: {out}");
+    }
 
     #[test]
     fn rewrites_len_property_to_call() {
