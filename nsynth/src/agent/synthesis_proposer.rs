@@ -1625,13 +1625,17 @@ fn model_response_to_multifile_patch(context: &RepairContext, response: &str) ->
                 path,
                 orig,
                 current,
-                "gated model multi-file repair (untrusted; cargo-test gated)",
+                "gated model multi-function repair (untrusted; cargo-test gated)",
             ));
             files_changed += 1;
         }
     }
-    if files_changed >= 2 {
-        Some(patch.with_metadata("proposer", "model_repair_multifile"))
+    // We already required >= 2 proposed functions (top of fn); accept the patch whether they land in
+    // one file (the common case: a struct whose methods span a single lib.rs -- add/count/median) or
+    // several. This is what completes a MIXED crate the templates can't fully fill: the model returns
+    // ALL the still-empty functions and they're applied together, then cargo gates the whole thing.
+    if files_changed >= 1 {
+        Some(patch.with_metadata("proposer", "model_repair_multifn"))
     } else {
         None
     }
