@@ -3,11 +3,14 @@
 //! Pure functions: normalize identifiers + integer literals to holes, cluster by
 //! normalized statement sequence, report top-k recurring templates, and
 //! instantiate a mined template against a `Problem` (const-hole fill + verify).
+//! Auto-mine: [`append_harvest_row`] refreshes `.nsynth/mined_templates.json`
+//! (or `NSYNTH_MINED_TEMPLATES`) once the harvest has ≥2 rows — closes the
+//! harvest→mine→instantiate flywheel without a manual `mine_schemas` step.
 //! No lg-core dependency.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One harvested solve row (JSONL `{task, code}` or `{prompt, program}`).
 #[derive(Debug, Clone, Deserialize)]
@@ -324,6 +327,10 @@ pub fn extract_entry_fn_body(lib_rs: &str) -> String {
 /// Append one verified (task, code) row to `NSYNTH_HARVEST` JSONL (Phase-4 flywheel).
 /// Best-effort; never fails the caller. No-op when the env var is unset/empty.
 /// When `code` looks like a full `lib.rs`, only the entry fn body is stored.
+///
+/// After a successful append, best-effort **auto-mines** templates into
+/// [`mined_templates_out_path`] when the harvest has ≥2 rows (disable with
+/// `NSYNTH_AUTO_MINE=0`; throttle with `NSYNTH_AUTO_MINE_EVERY=N`).
 pub fn append_harvest_row(task: &str, code: &str) {
     let Ok(path) = std::env::var("NSYNTH_HARVEST") else {
         return;
@@ -352,8 +359,82 @@ pub fn append_harvest_row(task: &str, code: &str) {
         .append(true)
         .open(&path)
     {
-        let _ = writeln!(f, "{line}");
+        if writeln!(f, "{line}").is_ok() {
+            maybe_refresh_templates_after_harvest(&path);
+        }
     }
+}
+
+/// Path where auto-mined / CLI-mined templates are written and later loaded.
+/// Prefers `NSYNTH_MINED_TEMPLATES`; else `.nsynth/mined_templates.json` (cwd).
+pub fn mined_templates_out_path() -> PathBuf {
+    if let Ok(path) = std::env::var("NSYNTH_MINED_TEMPLATES") {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+    PathBuf::from(".nsynth/mined_templates.json")
+}
+
+fn auto_mine_enabled() -> bool {
+    match std::env::var("NSYNTH_AUTO_MINE") {
+        Ok(v)
+            if v == "0"
+                || v.eq_ignore_ascii_case("false")
+                || v.eq_ignore_ascii_case("off")
+                || v.eq_ignore_ascii_case("no") =>
+        {
+            false
+        }
+        _ => true,
+    }
+}
+
+/// Re-cluster a harvest JSONL into mined templates and write them.
+/// Returns how many templates were written (`0` if fewer than 2 harvest rows).
+pub fn refresh_templates_from_harvest(
+    harvest_path: &Path,
+    out_path: &Path,
+    top_k: usize,
+) -> Result<usize, String> {
+    let rows = load_harvest_jsonl(harvest_path)?;
+    if rows.len() < 2 {
+        return Ok(0);
+    }
+    let templates = cluster_templates(&rows, top_k);
+    write_templates_json(out_path, &templates)?;
+    Ok(templates.len())
+}
+
+/// Best-effort auto-mine after a harvest append. Never panics / never fails caller.
+fn maybe_refresh_templates_after_harvest(harvest_path: &str) {
+    if !auto_mine_enabled() {
+        return;
+    }
+    let path = Path::new(harvest_path);
+    let Ok(rows) = load_harvest_jsonl(path) else {
+        return;
+    };
+    let n = rows.len();
+    if n < 2 {
+        return;
+    }
+    let every: usize = std::env::var("NSYNTH_AUTO_MINE_EVERY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    // Always refresh at the first useful size (2), then every N rows.
+    if every > 1 && n != 2 && n % every != 0 {
+        return;
+    }
+    let top_k: usize = std::env::var("NSYNTH_AUTO_MINE_TOP_K")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+        .max(1);
+    let out = mined_templates_out_path();
+    let _ = refresh_templates_from_harvest(path, &out, top_k);
 }
 
 /// Format top templates for CLI stdout.
@@ -695,15 +776,64 @@ mod characterization {
 
     #[test]
     fn append_harvest_row_writes_jsonl() {
+        let _guard = harvest_env_lock();
         let path = std::env::temp_dir().join(format!("nsynth_harvest_{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::env::set_var("NSYNTH_HARVEST", &path);
+        std::env::set_var("NSYNTH_AUTO_MINE", "0"); // isolate: no template side-effect
         append_harvest_row("double", "fn double(x: i64) -> i64 { return x * 2; }");
         append_harvest_row("triple", "fn triple(x: i64) -> i64 { return x * 3; }");
         let text = std::fs::read_to_string(&path).expect("harvest file");
         assert_eq!(text.lines().count(), 2);
         assert!(text.contains("\"task\":\"double\""));
         std::env::remove_var("NSYNTH_HARVEST");
+        std::env::remove_var("NSYNTH_AUTO_MINE");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn append_harvest_auto_mines_templates() {
+        let _guard = harvest_env_lock();
+        let id = std::process::id();
+        let harvest = std::env::temp_dir().join(format!("nsynth_auto_harvest_{id}.jsonl"));
+        let templates = std::env::temp_dir().join(format!("nsynth_auto_templates_{id}.json"));
+        let _ = std::fs::remove_file(&harvest);
+        let _ = std::fs::remove_file(&templates);
+        std::env::set_var("NSYNTH_HARVEST", &harvest);
+        std::env::set_var("NSYNTH_MINED_TEMPLATES", &templates);
+        std::env::set_var("NSYNTH_AUTO_MINE", "1");
+        std::env::remove_var("NSYNTH_AUTO_MINE_EVERY");
+
+        append_harvest_row("double", "fn double(x: i64) -> i64 { return x * 2; }");
+        assert!(
+            !templates.is_file(),
+            "single row should not yet write templates"
+        );
+        append_harvest_row("triple", "fn triple(y: i64) -> i64 { return y * 3; }");
+        assert!(templates.is_file(), "≥2 rows should auto-mine templates");
+        let loaded = load_templates_json(&templates).expect("load templates");
+        assert!(!loaded.is_empty());
+        let shared = loaded.iter().find(|t| t.count >= 2).expect("shared shape");
+        assert!(
+            shared.normalized.contains("?c"),
+            "auto-mined body must keep const holes: {}",
+            shared.normalized
+        );
+
+        // Direct API: refresh is idempotent and returns template count.
+        let n = refresh_templates_from_harvest(&harvest, &templates, 10).expect("refresh");
+        assert!(n >= 1);
+
+        std::env::remove_var("NSYNTH_HARVEST");
+        std::env::remove_var("NSYNTH_MINED_TEMPLATES");
+        std::env::remove_var("NSYNTH_AUTO_MINE");
+        let _ = std::fs::remove_file(&harvest);
+        let _ = std::fs::remove_file(&templates);
+    }
+
+    fn harvest_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
