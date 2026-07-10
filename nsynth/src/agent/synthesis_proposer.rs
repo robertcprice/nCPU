@@ -1213,6 +1213,12 @@ fn generate_mutations(content: &str) -> Vec<String> {
             (2, &["!="])
         } else if c == b'!' && n1 == b'=' {
             (2, &["=="])
+        } else if c == b'+' && n1 == b'=' && p1 != b'+' {
+            (2, &["-=", "*="]) // compound-assign swap: `total += x` <-> `-=` (wrong-op struct bug)
+        } else if c == b'-' && n1 == b'=' && p1 != b'-' && p1 != b'>' {
+            (2, &["+="])
+        } else if c == b'*' && n1 == b'=' && p1 != b'*' {
+            (2, &["+=", "/="])
         } else if c == b'<' && n1 != b'=' && n1 != b'<' && p1 != b'<' && sp {
             (1, &["<=", ">"])
         } else if c == b'>' && n1 != b'=' && n1 != b'>' && p1 != b'>' && p1 != b'-' && p1 != b'=' && sp {
@@ -4289,6 +4295,13 @@ mod tests {
         // A no-param mutator (inc) -> `self.n += 1`.
         let inc = "pub struct C { pub n: i64 }\nimpl C { pub fn inc(&mut self) {} }\n";
         assert!(generate_stub_fills(inc).iter().any(|m| m.contains("self.n += 1;")), "no inc body");
+    }
+
+    #[test]
+    fn mutation_swaps_compound_assignment() {
+        // `self.total += x` (wrong-op struct bug injected as `-=`) must be recoverable both ways.
+        assert!(generate_mutations("fn f(){ self.total -= x; }\n").iter().any(|m| m.contains("self.total += x")), "no -= -> +=");
+        assert!(generate_mutations("fn f(){ self.total += x; }\n").iter().any(|m| m.contains("self.total -= x")), "no += -> -=");
     }
 
     #[test]
