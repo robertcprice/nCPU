@@ -44,8 +44,14 @@ impl CharValue {
 pub fn parse_inline_char_examples(prose: &str) -> Vec<CharExample> {
     let mut out = Vec::new();
     let lower = prose.replace("→", "->");
+    // Prefer the arrow-example region after the first `:` when present
+    // ("double a number: 2->4, 3->6"), so we don't need the full NL router.
+    let body = match lower.split_once(':') {
+        Some((_head, tail)) if tail.contains("->") => tail.trim(),
+        _ => lower.as_str(),
+    };
     // Split on top-level commas/semicolons (not inside () / [] / "").
-    for chunk in split_top_level(&lower) {
+    for chunk in split_top_level(body) {
         let chunk = chunk.trim();
         if chunk.is_empty() {
             continue;
@@ -81,7 +87,7 @@ pub fn parse_inline_char_examples(prose: &str) -> Vec<CharExample> {
             }
         }
     }
-    // Also accept verified_nl_router form: "prompt: 2->4, 3->6"
+    // Fallback: verified_nl_router form for nested/array literals the light parser misses.
     if out.len() < 2 && prose.contains("->") {
         let (_, bench) = crate::verified_nl_router::split_prompt_examples(prose);
         if let Some(converted) = char_examples_from_bench(&bench) {
