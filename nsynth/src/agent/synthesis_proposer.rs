@@ -2400,6 +2400,21 @@ fn synthesize_mined_for_fn(
             (res.success && crate::runtime::verify_problem_code_strict(&problem, &res.code).is_ok())
                 .then(|| (res.code, res.method))
         })?;
+    // NAME CANONICALIZATION. A front-door LIBRARY op keeps its OWN canonical name — "double the
+    // input" resolves to `times_two`, "the sum of a list" to `array_sum` — but `problem.name`
+    // (and the repo patch) address `repo_fn`. The strict re-verify below runs a `main` that calls
+    // `problem.name`, so a differently-named single op would spuriously fail here even though the
+    // router already verified it reproduces every mined example. Rename the op's entry fn to
+    // `repo_fn` so the verify addresses the right symbol; `reshape_to_repo_signature` renames to
+    // the SAME target downstream, so this is consistent. Only single-function ops are renamed —
+    // a multi-fn composition's entry is selected structurally inside reshape, not by first-fn here,
+    // so those are left untouched (unchanged behavior; they simply don't gain this rescue).
+    let code = match first_fn_name_in_source(&code) {
+        Some(entry) if entry != repo_fn && split_top_level_functions(&code).len() == 1 => {
+            rename_first_fn(&code, repo_fn)
+        }
+        _ => code,
+    };
     if crate::runtime::verify_problem_code_strict(&problem, &code).is_err() {
         return None;
     }
@@ -5434,6 +5449,62 @@ mod tests {
         assert!(
             edit.new_text.contains("assert_eq!(count_positives(vec![5, -2, 3, -4, 5]), 3)"),
             "append must PRESERVE the original asserts, not overwrite the file"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// NAME-MISMATCH RESCUE: the repo fn is `double`, but "double the input value" resolves through
+    /// the front door to the library op `times_two` — a DIFFERENT canonical name. The redundant
+    /// strict re-verify runs a `main` that calls `problem.name` (== `double`), so before the fix the
+    /// `fn times_two` body spuriously failed that verify and the stage declined, even though the
+    /// router had already verified `times_two` reproduces the mined asserts. The single-fn entry is
+    /// now renamed to `double` before the verify, so the stub is repaired.
+    #[test]
+    fn test_mined_repairs_when_library_op_name_differs_from_repo_fn() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_namemismatch_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"nm\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // `double` is a stub returning its input; the failing asserts pin 2*n.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn double(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::double;\n    #[test]\n    fn t() {\n        assert_eq!(double(2), 4);\n        assert_eq!(double(3), 6);\n        assert_eq!(double(4), 8);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "nm".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: double the input value".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_test_mined_synthesis_patch(&task, &context, "double the input value")
+            .expect("front-door op `times_two` should repair repo fn `double` after name canonicalization");
+        let edit = patch
+            .edits
+            .iter()
+            .find(|e| e.path == "src/lib.rs")
+            .expect("edit targets src/lib.rs");
+        assert!(
+            edit.new_text.contains("fn double(n: i64) -> i64"),
+            "repo signature (name `double`) preserved: {}",
+            edit.new_text
+        );
+        assert!(
+            edit.new_text.contains('2') && !edit.new_text.contains("times_two"),
+            "body is the 2*n behavior renamed onto `double`, not a stray `times_two`: {}",
+            edit.new_text
         );
         let _ = fs::remove_dir_all(&root);
     }
