@@ -250,6 +250,23 @@ pub fn nl_synthesis_proposer_with_run(
         }
     }
 
+    // REPAIR-FIRST (measured, model-free): a GENERIC repair request ("fix the failing tests") names
+    // no op, so the ONLY spec is the failing test's asserts — which UNDER-DETERMINE the function. A
+    // from-scratch re-synthesis from 2-3 asserts OVERFITS them (measured via repair_bench: `x < cap`
+    // shipped as `x == cap`, and `a - b - c` shipped as `a0 + max(a0, 5)` — both green on the shown
+    // asserts, WRONG on held-out), pre-empting the bounded STRUCTURE-PRESERVING mutation of the
+    // existing near-correct code, which generalizes. So when the NL resolves no op, try the mutation
+    // repair BEFORE the synthesis block. A stub has nothing to mutate -> this declines and synthesis
+    // proceeds unchanged; a NAMED op ("add two numbers") IS a well-determined spec, so that path
+    // keeps synthesis first (fast + correct, e.g. the repo_capability fixtures are untouched).
+    if crate::agent::coding_intent::CodingIntent::from_nl(&description).is_err() {
+        if let Some(patch) =
+            crate::agent::synthesis_proposer::try_mutation_repair_patch(task, context, analysis)
+        {
+            return Ok(patch);
+        }
+    }
+
     // Primary path: genuine verified synthesis (bridge + solver), generalizing
     // to any demonstrated function (registry op or inline I/O examples) rather
     // than the canned keyword shapes. Real synthesis *is* a synthesis candidate,

@@ -1273,12 +1273,21 @@ fn function_span_at_line(code: &str, line: usize) -> Option<(usize, usize)> {
 /// whole-file mutations, so the caller path is unchanged when no line is known.
 fn localized_then_full_mutations(orig: &str, span: Option<(usize, usize)>) -> Vec<String> {
     let mut out = Vec::new();
+    // SOUNDNESS: never localize INTO the `#[cfg(test)]` module. An `assert_eq!` failure panics at the
+    // ASSERT line, so the failing `file:line` points into the test — localizing there would mutate the
+    // test's asserts and "fix" the failure by CORRUPTING the test (a never-wrong violation). The
+    // whole-file pass below already excludes the test module; when the located span lies in the test
+    // region, drop it and fall back to whole-file (which for an assert bug still reaches the buggy
+    // production code). Localization only helps PANIC-in-production bugs, whose span is before this.
+    let test_start = orig.find("#[cfg(test)]").unwrap_or(orig.len());
     if let Some((s, e)) = span {
-        let func = &orig[s..e];
-        for fv in generate_mutations(func) {
-            // `func` has no `#[cfg(test)]`, so each `fv` is the mutated function verbatim; splice it
-            // back into the surrounding file.
-            out.push(format!("{}{}{}", &orig[..s], fv, &orig[e..]));
+        if s < test_start {
+            let func = &orig[s..e];
+            for fv in generate_mutations(func) {
+                // `func` is production code with no `#[cfg(test)]`, so each `fv` is the mutated
+                // function verbatim; splice it back into the surrounding file.
+                out.push(format!("{}{}{}", &orig[..s], fv, &orig[e..]));
+            }
         }
     }
     out.extend(generate_mutations(orig));
@@ -1483,6 +1492,10 @@ fn generate_mutations(content: &str) -> Vec<String> {
     // Some(a/b)` should guard `b == 0 -> None`. A single token swap can't express this; a template
     // can. Bounded and last-ish; cargo picks the guard/edge that actually passes.
     out.extend(structural_guard_mutations(code, tail));
+    // BOOLEAN-RETURN negation: a `-> bool` fn whose predicate is inverted (`v.is_empty()` where
+    // `!v.is_empty()` is meant, or a stray `!`). A single operator swap can't express a `!`; toggle
+    // it on the return expression. Bounded (one per bool fn).
+    out.extend(bool_return_negation_mutations(code, tail));
     // OPERAND function-wrap: a bare identifier operand `x` -> `F(x)` for each single-arg function F
     // defined in the code (the "wrong sub-expression" bug: `double(x) + x` -> `double(x) + double(x)`).
     // Last, so the cheaper operator/assignment/const fixes are tried first under the mutation cap.
@@ -1536,6 +1549,74 @@ fn generate_mutations(content: &str) -> Vec<String> {
                 i += 1;
             }
         }
+    }
+    out
+}
+
+/// For each `-> bool` function, toggle a `!` on its return expression — the tail expression or a
+/// `return EXPR;`. A common real bug is an inverted predicate (`v.is_empty()` vs `!v.is_empty()`),
+/// which no single operator swap can express. Bounded: at most one candidate per bool function.
+fn bool_return_negation_mutations(code: &str, tail: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let cb = code.as_bytes();
+    let mut search = 0usize;
+    while let Some(rel) = code[search..].find("-> bool") {
+        let hdr = search + rel;
+        search = hdr + 7;
+        let Some(brel) = code[hdr..].find('{') else { continue };
+        let bopen = hdr + brel;
+        // brace-match the body
+        let mut depth = 0i32;
+        let mut close = None;
+        let mut k = bopen;
+        while k < cb.len() {
+            match cb[k] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(k);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        let Some(close) = close else { continue };
+        let inner_start = bopen + 1;
+        let inner = &code[inner_start..close];
+        // The return-expression byte span [es, ee): a `return EXPR;`, else the tail expression.
+        let (es, ee) = if let Some(rp) = inner.rfind("return ") {
+            let estart = inner_start + rp + 7;
+            match code[estart..close].find(';') {
+                Some(p) => (estart, estart + p),
+                None => continue,
+            }
+        } else {
+            let te = inner.trim_end();
+            if te.is_empty() || te.ends_with(';') || te.ends_with('}') {
+                continue; // a block/statement body, not a bare tail expression
+            }
+            let ee = inner_start + te.len();
+            let es = match te.rfind(';') {
+                Some(p) => inner_start + p + 1,
+                None => inner_start,
+            };
+            (es, ee)
+        };
+        let raw = &code[es..ee];
+        let expr = raw.trim();
+        if expr.is_empty() || expr.contains('{') {
+            continue; // skip `if { .. } else { .. }` and other block expressions
+        }
+        let toggled = match expr.strip_prefix('!') {
+            Some(rest) => rest.trim().to_string(),
+            None => format!("!({expr})"),
+        };
+        let lead = raw.len() - raw.trim_start().len();
+        let es_t = es + lead;
+        out.push(splice_mutation(code, tail, es_t, expr.len(), &toggled));
     }
     out
 }
@@ -4844,6 +4925,54 @@ mod tests {
             "span version must prepend function-variants: {} vs {}",
             localized.len(),
             full_only.len()
+        );
+    }
+
+    #[test]
+    fn bool_return_negation_toggles_the_predicate() {
+        // Tail-expression form: `v.is_empty()` -> `!(v.is_empty())`.
+        let a = "pub fn accepts(v: &[i64]) -> bool { v.is_empty() }\n";
+        assert!(
+            generate_mutations(a).iter().any(|m| m.contains("!(v.is_empty())")),
+            "no negation of the tail predicate"
+        );
+        // `return EXPR;` form, and removing an existing `!`.
+        let b = "pub fn ok(n: i64) -> bool { return !flag(n); }\n";
+        assert!(
+            generate_mutations(b).iter().any(|m| m.contains("return flag(n);")),
+            "no removal of the stray negation"
+        );
+        // Must NOT fire on a non-bool return (no spurious `!` on an i64).
+        let c = "pub fn add(a: i64, b: i64) -> i64 { a + b }\n";
+        assert!(
+            !generate_mutations(c).iter().any(|m| m.contains("!(")),
+            "negated a non-bool return"
+        );
+    }
+
+    #[test]
+    fn localized_mutations_never_touch_the_test_module() {
+        // An assert failure reports the ASSERT's line, which sits in `#[cfg(test)]`. A span there must
+        // NOT localize (else it would mutate the test to "pass") — it degrades to whole-file, which
+        // excludes tests. So the result equals the plain whole-file mutation set, and NO candidate
+        // alters the test asserts.
+        let code = "pub fn fits(x: i64, cap: i64) -> bool { x < cap }\n\n\
+                    #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+                    assert_eq!(fits(5, 5), true);\n }\n}\n";
+        // A line inside the test module.
+        let test_line = code[..code.find("assert_eq!").unwrap()].matches('\n').count() + 1;
+        let span = function_span_at_line(code, test_line);
+        assert!(span.is_some(), "the assert line should resolve to the test fn span");
+        let muts = localized_then_full_mutations(code, span);
+        assert_eq!(
+            muts.len(),
+            generate_mutations(code).len(),
+            "a test-region span must NOT prepend localized (test-mutating) candidates"
+        );
+        // Belt and suspenders: no candidate changes the asserted literal (would corrupt the test).
+        assert!(
+            muts.iter().all(|m| m.contains("assert_eq!(fits(5, 5), true)")),
+            "a mutation altered the test assertion — never-wrong violation"
         );
     }
 

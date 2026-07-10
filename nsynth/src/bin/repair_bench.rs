@@ -116,6 +116,57 @@ fn fixtures() -> Vec<Case> {
                 .to_string(),
             "assert_eq!(safe_div(8, 0), 0); assert_eq!(safe_div(8, 4), 2); assert_eq!(safe_div(0, 3), 0);",
         ),
+        // --- MORE CLASSES (frontier map: which general mutation does the engine actually lack?) ---
+        c(
+            "bool_negation",
+            "boolean flip: missing `!` on the predicate",
+            true,
+            "pub fn accepts(v: &[i64]) -> bool { v.is_empty() }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(accepts(&[1]), true);\n  assert_eq!(accepts(&[]), false);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(accepts(&[9, 9]), true); assert_eq!(accepts(&[]), false); assert_eq!(accepts(&[0]), true);",
+        ),
+        c(
+            "two_token",
+            "two wrong operators in one expression (exercises the two-edit search)",
+            true,
+            "pub fn total3(a: i64, b: i64, c: i64) -> i64 { a - b - c }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(total3(1, 2, 3), 6);\n  assert_eq!(total3(10, 5, 5), 20);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(total3(0, 0, 0), 0); assert_eq!(total3(7, 8, 9), 24); assert_eq!(total3(1, 1, 1), 3);",
+        ),
+        c(
+            "arg_swap",
+            "swapped operands: b - a where a - b is meant",
+            true,
+            "pub fn diff(a: i64, b: i64) -> i64 { b - a }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(diff(10, 3), 7);\n  assert_eq!(diff(5, 2), 3);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(diff(9, 4), 5); assert_eq!(diff(0, 0), 0); assert_eq!(diff(20, 1), 19);",
+        ),
+        c(
+            "wrong_constant_1024",
+            "base confusion: multiplies by 1000 where 1024 is meant",
+            true,
+            "pub fn kib(n: i64) -> i64 { n * 1000 }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(kib(1), 1024);\n  assert_eq!(kib(2), 2048);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(kib(3), 3072); assert_eq!(kib(0), 0); assert_eq!(kib(10), 10240);",
+        ),
+        c(
+            "boundary_inclusive",
+            "boundary: `<` where `<=` is meant",
+            true,
+            "pub fn fits(x: i64, cap: i64) -> bool { x < cap }\n\n\
+             #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+             assert_eq!(fits(5, 5), true);\n  assert_eq!(fits(6, 5), false);\n }\n}\n"
+                .to_string(),
+            "assert_eq!(fits(0, 0), true); assert_eq!(fits(3, 5), true); assert_eq!(fits(5, 4), false);",
+        ),
         // --- CEILING: a coordinated multi-token rewrite. Model-free RE-SYNTHESIS from the 3 shown
         // asserts OVERFITS (it found "has any uppercase char", green on shown, wrong in general).
         // Held-out asserts expose it -> the honest ceiling where the model lane is actually needed.
