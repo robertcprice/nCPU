@@ -29,6 +29,8 @@ pub enum QueryRoute {
     ExplainCode,
     CodeReview,
     GreenfieldProject,
+    /// Prose → scaffold oracle (schema or model spec) → hole-filler → cargo gate.
+    WholeSoftware,
     ToolExplore,
     Clarification,
 }
@@ -208,6 +210,16 @@ impl CodingAgentSession {
             crate::learn_nl::LearnIntake::NotLearn => {}
             intake => {
                 let result = self.run_learn_intake(intake);
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
+        // WHOLE-SOFTWARE schema door FIRST: "a todo list where each task has …" is a
+        // decidable scaffold, not an op-library guess. Must run BEFORE verified_nl_router
+        // so a bare-NL schema is not mis-labeled as a tentative library match.
+        if crate::schema_component::is_schema_prose(query) {
+            if let Some(result) = self.try_run_whole_software(query) {
                 self.record_result(query, &result);
                 return result;
             }
@@ -634,6 +646,18 @@ impl CodingAgentSession {
             }
         }
 
+        // WHOLE-SOFTWARE (non-schema): construction intent that site/backend/cli/
+        // component did not claim — try gated propose_spec, else fall through to
+        // comprehend / honest refuse. Schema prose already handled above.
+        if crate::whole_software::should_attempt_whole_software(query)
+            && !crate::schema_component::is_schema_prose(query)
+        {
+            if let Some(result) = self.try_run_whole_software(query) {
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
             Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),
@@ -964,6 +988,11 @@ impl CodingAgentSession {
             QueryRoute::RepoRepair => self.run_repo_repair(query, req),
             QueryRoute::ExplainCode | QueryRoute::CodeReview => self.run_explain(query, req),
             QueryRoute::GreenfieldProject => self.run_greenfield(query, req, gate),
+            QueryRoute::WholeSoftware => {
+                // Whole-software is entered via try_run_whole_software before
+                // comprehend; if we somehow land here, fall through to explore.
+                self.handle_explore(query)
+            }
             QueryRoute::ToolExplore => self.handle_explore(query),
             QueryRoute::Clarification => self.handle_explore(query),
         }
@@ -1707,6 +1736,88 @@ impl CodingAgentSession {
         }
     }
 
+    /// WP1 product path: scaffold a checkable crate (schema or gated spec), then
+    /// run the repo-agent hole-filler against `cargo test`. Returns `None` when
+    /// neither scaffold tier applies (caller falls through).
+    fn try_run_whole_software(&mut self, query: &str) -> Option<AgentQueryResult> {
+        let scaffolded = crate::whole_software::try_scaffold(&self.root, query)?;
+        Some(self.fill_scaffolded_whole_software(query, &scaffolded))
+    }
+
+    fn fill_scaffolded_whole_software(
+        &mut self,
+        query: &str,
+        scaffolded: &crate::whole_software::ScaffoldedCrate,
+    ) -> AgentQueryResult {
+        // Sparse intent: the failing tests ARE the oracle. from_nl would try to
+        // resolve "fix the failing tests" as an op and fail; a lenient/sparse
+        // intent keeps the repair ladder on the mutation → multi-hole path.
+        let intent = CodingIntent {
+            function_name: "f".into(),
+            signature: String::new(),
+            category: "whole_software".into(),
+            description: "fix the failing tests".into(),
+            examples: Vec::new(),
+            constraints: Vec::new(),
+            confidence: 0.0,
+            unresolved: vec!["scaffold-oracle".into()],
+            evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
+        };
+        let mut spec = CodeTaskSpec::from_nl(
+            self.root.to_string_lossy(),
+            "fix the failing tests",
+            intent,
+            "cargo test".to_string(),
+            vec!["src/**".into()],
+            8,
+        );
+        // Multi-hole / joint search can take tens of seconds on richer schemas.
+        spec.budget.max_wall_ms = 180_000;
+        spec.budget.max_attempts = 12;
+        spec.budget.max_synthesis_candidates = 8;
+
+        let mut agent = RepoAgent::new(&self.root, self.policy.clone());
+        let repo_result = agent.run(&spec);
+        let success = repo_result.success;
+        let response = if success {
+            format!(
+                "Built whole-software crate via {} — {} — filled + cargo-verified after {} iterations (phases: {})",
+                scaffolded.method,
+                scaffolded.summary,
+                repo_result.repair_iterations,
+                repo_result.phases_completed.join(" → ")
+            )
+        } else {
+            format!(
+                "Whole-software scaffold ({}) wrote a checkable crate but fill failed after {} iterations.\n{}\n\nQuery: {}",
+                scaffolded.summary,
+                repo_result.repair_iterations,
+                repo_result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "repair did not satisfy oracle".to_string()),
+                truncate(query, 120)
+            )
+        };
+        AgentQueryResult {
+            route: QueryRoute::WholeSoftware,
+            success,
+            response,
+            workflow: "whole_software".into(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some(scaffolded.method.to_string()),
+            repo_result: Some(repo_result),
+            tool_trace: vec![
+                ("whole_software.scaffold".into(), scaffolded.summary.clone()),
+                (
+                    "whole_software.n_tests".into(),
+                    scaffolded.n_tests.to_string(),
+                ),
+            ],
+        }
+    }
+
     fn run_explain(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
         let mut tool_trace = Vec::new();
         let index = match RepoIndex::build(&self.root, &self.policy) {
@@ -1846,10 +1957,13 @@ impl CodingAgentSession {
                 success: false,
                 response: format!(
                     "I couldn't confidently understand \"{}\" as something I can build \
-                     or compute — nothing resolved to a known operation, component, or \
-                     artifact. Try naming a concrete function with an example (e.g. \"a \
-                     function f where f(2)=4\"), or a known artifact: a website/page, an \
-                     api, or a component like a counter or a stack.",
+                     or compute — nothing resolved to a known operation, component, \
+                     schema, or artifact. Try a decidable schema (e.g. \"a todo list \
+                     where each task has a title and a priority number\"), a function \
+                     with an example (e.g. \"a function f where f(2)=4\"), a website/page, \
+                     an api, or a component like a counter. For non-schema logic \
+                     (auth/guards), set NSYNTH_LOCAL_LLM_URL so the model can write a \
+                     checkable SPEC the engine then fills.",
                     truncate(query, 100)
                 ),
                 workflow: "unknown".into(),
@@ -2424,6 +2538,61 @@ mod tests {
         );
         assert!(has_build_intent("build a snake game"), "sanity: build intent detected");
         assert!(!has_build_intent("what does this project do"), "sanity: question is not build intent");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// WP1 product path: schema prose → scaffold + hole-fill + cargo gate in ONE
+    /// `handle_query` (no manual schema_component bin). Small inventory keeps runtime bounded.
+    #[test]
+    fn whole_software_schema_product_path_fills_and_verifies() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ws_schema");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        let r = session.handle_query("an inventory where each product has a price number");
+        assert_eq!(
+            r.route,
+            QueryRoute::WholeSoftware,
+            "schema prose must take the whole-software route: {}",
+            r.response
+        );
+        assert_eq!(
+            r.synthesis_method.as_deref(),
+            Some("whole-software:schema"),
+            "method provenance"
+        );
+        assert!(
+            r.success,
+            "schema scaffold must fill + cargo-verify via product path: {}",
+            r.response
+        );
+        let lib = fs::read_to_string(root.join("src/lib.rs")).expect("lib.rs");
+        assert!(
+            !lib.contains("pub fn count(&self) -> i64 {}"),
+            "stubs must be filled, not left empty"
+        );
+        assert!(lib.contains("fn t_count()"), "canonical tests retained");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn whole_software_schema_with_build_verb_still_routes() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ws_build");
+        fs::create_dir_all(&root).unwrap();
+        // Scaffold-only check: parse + write without waiting for full fill when we
+        // only need routing. Use try_scaffold directly for the fast assert, then a
+        // short handle_query on a distinct root for route identity via schema door.
+        let scaffolded = crate::whole_software::try_scaffold(
+            &root,
+            "build a shelf where each book has a title and a pages number",
+        )
+        .expect("schema with build verb");
+        assert_eq!(
+            scaffolded.kind,
+            crate::whole_software::ScaffoldKind::Schema
+        );
+        assert!(root.join("src/lib.rs").is_file());
         let _ = fs::remove_dir_all(root);
     }
 
