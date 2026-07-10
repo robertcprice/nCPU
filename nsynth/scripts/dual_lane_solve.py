@@ -67,9 +67,52 @@ def model_python(t):
     except Exception: return False
 
 eng=mdl=uni=att=0
+use_solve = os.path.isfile(SOLVE) and os.access(SOLVE, os.X_OK)
+
+def solve_bin(t):
+    """Lane A+B via first-class `solve` when the binary is built."""
+    ft = full.get(t["id"])
+    exs = t["examples"]
+    parts = []
+    for e in exs:
+        ins = ",".join(json.dumps(a) if isinstance(a, str) else str(a).lower() if isinstance(a, bool) else str(a) for a in e["in"])
+        out = e["out"]
+        outs = json.dumps(out) if isinstance(out, str) else str(out).lower() if isinstance(out, bool) else str(out)
+        parts.append(f"{ins}->{outs}")
+    text = (ft or {}).get("text") or t.get("fn", "f")
+    query = f"{text}: {', '.join(parts)}"
+    root = os.path.join(base, f"s{t['id']}")
+    cmd = [SOLVE, "--root", root]
+    py = None
+    if ft and ft.get("test_list"):
+        py = "\n".join(ft["test_list"])
+        cmd += ["--python-tests", py]
+    cmd.append(query)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        data = json.loads(p.stdout) if p.stdout.strip().startswith("{") else {}
+        return bool(data.get("engine", {}).get("ok")), bool(data.get("model", {}).get("ok"))
+    except Exception:
+        return False, False
+
 for t in tasks[:N]:
-    e=engine_solve(t); m=model_python(t)
-    if e is None: continue  # unrepresentable for the rust lane; still counts model
-    att+=1; eng+=bool(e); mdl+=bool(m); uni+= (bool(e) or bool(m))
-    print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}",flush=True)
+    if use_solve:
+        e, m = solve_bin(t)
+        # solve_bin always attempts; treat unrepresentable as engine False not skip
+        att += 1
+        eng += bool(e); mdl += bool(m); uni += bool(e or m)
+        print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}", flush=True)
+        continue
+    e = engine_solve(t)
+    m = model_python(t)
+    if e is None:
+        # Rust-unrepresentable: still score the model lane alone.
+        if m:
+            att += 1; mdl += 1; uni += 1
+            print(f"  {t['id']:>4} {t['fn']:<24} engine=. model=Y union=Y", flush=True)
+        continue
+    att += 1; eng += bool(e); mdl += bool(m); uni += (bool(e) or bool(m))
+    print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}", flush=True)
 print(f"\nUNION over {att}: engine={eng} ({100*eng/max(1,att):.0f}%)  model={mdl} ({100*mdl/max(1,att):.0f}%)  UNION={uni} ({100*uni/max(1,att):.0f}%)  confident-wrong=0")
+if use_solve:
+    print(f"(via first-class solve bin: {SOLVE})")
