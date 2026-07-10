@@ -96,7 +96,7 @@ pub fn nl_synthesis_proposer(
     // TEST-MINED synthesis: the prose carried no examples, but the failing test's
     // `assert_eq!` calls do. Mine them and solve the real problem — deterministic,
     // verified, no model. Strictly stronger than the keyword fast-patch below.
-    if let Some(patch) = try_test_mined_synthesis_patch(task, context, &description) {
+    if let Some(patch) = try_test_mined_synthesis_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
 
@@ -2348,6 +2348,7 @@ pub fn try_test_mined_synthesis_patch(
     task: &RepoTaskSpec,
     context: &RepairContext,
     description: &str,
+    analysis: Option<&FailureAnalysis>,
 ) -> Option<RepairPatch> {
     let intent = CodingIntent::from_nl_lenient(description).ok();
     let target = pick_target_path(task, context, intent.as_ref()).ok()?;
@@ -2356,65 +2357,109 @@ pub fn try_test_mined_synthesis_patch(
         .as_ref()
         .map(|i| i.function_name.strip_prefix("nl_").unwrap_or(&i.function_name).to_string())
         .unwrap_or_default();
-    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+    let resolved_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
 
-    // Mine integer asserts for `repo_fn` across every context file (tests may live in
-    // a sibling module), dedup, and require enough points to PIN the function.
+    // TARGET FUNCTION, in PRIORITY order.
+    //  1. the function named by the CURRENT failing assert (from `analysis` file:line). This is what
+    //     makes MULTI-FUNCTION crates converge: once an iteration repairs fn A, cargo's next failure
+    //     points at fn B's assert, so the next iteration targets B instead of re-repairing A. Without
+    //     this the description resolves to the SAME fn every iteration and a second broken fn is never
+    //     reached (the loop stalls / exhausts iterations).
+    //  2. the description-resolved name — the fallback, and for a single-function crate it coincides
+    //     with (1) so behavior is identical.
+    // Each candidate is mined independently; `synthesize_mined_for_fn` returns None (skipped) when
+    // the fn is already correct or its examples don't verify, so a stale/wrong candidate can't emit a
+    // bad patch — and the real cargo test still gates every result (never-wrong preserved).
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(f) = asserted_fn_at_failure(context, analysis) {
+        candidates.push(f);
+    }
+    if !candidates.iter().any(|c| c == &resolved_fn) {
+        candidates.push(resolved_fn.clone());
+    }
+
+    for repo_fn in &candidates {
+        let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows.extend(mine_asserts(t, repo_fn));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        if rows.len() < 2 {
+            continue;
+        }
+        if let Some(patch) =
+            synthesize_mined_for_fn(context, description, repo_fn, rows, &target, &old_text)
+        {
+            return Some(patch);
+        }
+    }
+
+    // NAME-RECOVERY FALLBACK. None of the candidates pinned ≥2 rows: the NL intent mis-resolved the
+    // name — "count how many elements are positive" resolves to `is_positive` (the "positive" cue),
+    // whose asserts don't exist — or the function is MISSING entirely, so there is no definition for
+    // `resolve_repo_fn_name` to anchor on. The failing asserts NAME the function they call
+    // (`assert_eq!(count_positives(..), 3)`), so recover the dominant asserted call-name and re-mine.
+    // Purely additive: runs only after every candidate failed to pin rows; the recovered candidate is
+    // still strict-verified + cargo-gated downstream.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for f in &context.files {
+        if let Some(t) = f.text.as_deref() {
+            accumulate_asserted_call_names(t, &mut counts);
+        }
+    }
+    let recovered = counts
+        .into_iter()
+        .filter(|(n, _)| !candidates.iter().any(|c| c == n))
+        .max_by_key(|(_, c)| *c)
+        .map(|(n, _)| n);
+    let name = recovered?;
     let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
     for f in &context.files {
         if let Some(t) = f.text.as_deref() {
-            rows.extend(mine_asserts(t, &repo_fn));
+            rows.extend(mine_asserts(t, &name));
         }
     }
     rows.sort();
     rows.dedup();
-
-    // NAME-RECOVERY FALLBACK. The NL intent can mis-resolve the function name — "count how many
-    // elements are positive" resolves to `is_positive` (the "positive" cue), whose asserts don't
-    // exist — or the function is MISSING entirely, so there is no definition for `resolve_repo_fn_name`
-    // to anchor on. In both cases mining the resolved name pins too few rows. But the failing asserts
-    // NAME the function they call (`assert_eq!(count_positives(..), 3)`), so recover the dominant
-    // asserted call-name and re-mine. Purely additive: this runs ONLY when the resolved name already
-    // failed to pin ≥2 rows, so it can never override a correctly-resolved name, and the recovered
-    // candidate is still strict-verified + cargo-gated downstream (never-wrong preserved).
-    let mut repo_fn = repo_fn;
     if rows.len() < 2 {
-        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for f in &context.files {
-            if let Some(t) = f.text.as_deref() {
-                accumulate_asserted_call_names(t, &mut counts);
-            }
-        }
-        let recovered = counts
-            .into_iter()
-            .filter(|(n, _)| n != &repo_fn)
-            .max_by_key(|(_, c)| *c)
-            .map(|(n, _)| n);
-        let Some(name) = recovered else { return None };
-        let mut rows2: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
-        for f in &context.files {
-            if let Some(t) = f.text.as_deref() {
-                rows2.extend(mine_asserts(t, &name));
-            }
-        }
-        rows2.sort();
-        rows2.dedup();
-        if rows2.len() < 2 {
-            return None;
-        }
-        rows = rows2;
-        repo_fn = name;
+        return None;
     }
+    synthesize_mined_for_fn(context, description, &name, rows, &target, &old_text)
+}
 
-    // Delegate the synthesis+verify+reshape to `synthesize_mined_for_fn`, which is the SAME body
-    // this used to inline but with two capabilities the inline copy lacked: (1) it retargets the
-    // edit to the file that DEFINES `repo_fn` (a real repo often asserts in `tests/` while the
-    // function lives in `src/math.rs`), and (2) it APPENDS a missing function as a feature-add.
-    // Both are gated identically (front door → solver, strict-verify, memorization guard, reshape),
-    // so the never-wrong property is unchanged and single-file repairs stay byte-for-byte identical
-    // (the retarget only fires when a DIFFERENT context file defines the fn and the picked target
-    // does not). `target`/`old_text` are passed as the feature-add append site.
-    synthesize_mined_for_fn(context, description, &repo_fn, rows, &target, &old_text)
+/// The function named by the CURRENT failing assert, recovered from `analysis`'s `file:line`. Reads
+/// the implicated file at the failing line and returns the dominant `assert_eq!` call-name in a small
+/// window from there (covers a multi-line assert). `None` when there is no analysis, no line, the file
+/// isn't in context, or the failing line is not an assert (e.g. a compile error with no call) — the
+/// caller then falls back to the description-resolved name.
+fn asserted_fn_at_failure(
+    context: &RepairContext,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<String> {
+    let a = analysis?;
+    let file = a.file.as_deref()?;
+    let line = a.line? as usize; // 1-based
+    if line == 0 {
+        return None;
+    }
+    let text = context
+        .files
+        .iter()
+        .find(|f| f.path == file || f.path.ends_with(file) || file.ends_with(f.path.as_str()))
+        .and_then(|f| f.text.as_deref())?;
+    let lines: Vec<&str> = text.lines().collect();
+    if line > lines.len() {
+        return None;
+    }
+    let start = line - 1;
+    let end = (start + 3).min(lines.len());
+    let window = lines[start..end].join("\n");
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    accumulate_asserted_call_names(&window, &mut counts);
+    counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n)
 }
 
 /// Synthesize one verified repair for `repo_fn` from its mined I/O `rows`. Returns `None` when the
@@ -5489,6 +5534,7 @@ mod tests {
             &task,
             &context,
             "count how many elements are positive",
+            None,
         )
         .expect("front-door proposer should solve count_positives (library op via mined asserts)");
         assert!(
@@ -5546,6 +5592,7 @@ mod tests {
             &task,
             &context,
             "count how many elements are positive",
+            None,
         )
         .expect("feature-add: missing `count_positives` should be synthesized and appended");
         let edit = patch
@@ -5601,7 +5648,7 @@ mod tests {
             signals: Vec::new(),
         };
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
-        let patch = try_test_mined_synthesis_patch(&task, &context, "double the input value")
+        let patch = try_test_mined_synthesis_patch(&task, &context, "double the input value", None)
             .expect("front-door op `times_two` should repair repo fn `double` after name canonicalization");
         let edit = patch
             .edits
@@ -5617,6 +5664,89 @@ mod tests {
             edit.new_text.contains('2') && !edit.new_text.contains("times_two"),
             "body is the 2*n behavior renamed onto `double`, not a stray `times_two`: {}",
             edit.new_text
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// MULTI-FUNCTION targeting: a crate with TWO broken stubs (`inc`, `dbl`) in ONE file. The
+    /// description resolves to a SINGLE fn, so without failure-awareness both iterations would
+    /// re-target that one fn and the other stub would never be reached. The failing assert's
+    /// `file:line` (from `FailureAnalysis`) names the fn cargo is currently failing on, so the stage
+    /// targets THAT fn — the same call with the same description but a different failing line repairs
+    /// a different function. This is what lets the edit→test→repair loop converge on a multi-fn crate.
+    #[test]
+    fn test_mined_targets_the_failing_function_in_a_multi_fn_crate() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_multifn_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"mf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // inc asserts are lines 14-16, dbl asserts are lines 17-19 (1-based).
+        let src = "pub fn inc(n: i64) -> i64 {\n    n\n}\n\npub fn dbl(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::{inc, dbl};\n    #[test]\n    fn t() {\n        assert_eq!(inc(2), 3);\n        assert_eq!(inc(5), 6);\n        assert_eq!(inc(9), 10);\n        assert_eq!(dbl(2), 4);\n        assert_eq!(dbl(5), 10);\n        assert_eq!(dbl(9), 18);\n    }\n}\n";
+        fs::write(root.join("src/lib.rs"), src).expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "mf".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: increment a number".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 3,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let fail_at = |line: u32| FailureAnalysis {
+            kind: FailureKind::TestFailure,
+            file: Some("src/lib.rs".into()),
+            line: Some(line),
+            message: String::new(),
+            likely_cause: String::new(),
+            suggested_action: String::new(),
+        };
+        // SAME description, SAME context — only the failing line differs. Failure on a `dbl` assert
+        // (line 17) must target `dbl`; failure on an `inc` assert (line 14) must target `inc`.
+        let dbl_fail = fail_at(17);
+        let body_dbl = try_test_mined_synthesis_patch(
+            &task,
+            &context,
+            "increment a number",
+            Some(&dbl_fail),
+        )
+        .and_then(|p| p.edits.into_iter().find(|e| e.path == "src/lib.rs").map(|e| e.new_text))
+        .expect("failing `dbl` assert should target `dbl`");
+        // dbl repaired to a doubling; inc LEFT AS A STUB — proves the failing assert (not the
+        // description, which resolves to inc) chose the target.
+        assert!(
+            body_dbl.contains("fn dbl(n: i64) -> i64 {\n    return 2 * n;"),
+            "the `dbl` stub is repaired to 2*n: {body_dbl}"
+        );
+        assert!(
+            body_dbl.contains("pub fn inc(n: i64) -> i64 {\n    n\n}"),
+            "`inc` must stay a stub when the failure targets `dbl`: {body_dbl}"
+        );
+
+        let inc_fail = fail_at(14);
+        let body_inc = try_test_mined_synthesis_patch(
+            &task,
+            &context,
+            "increment a number",
+            Some(&inc_fail),
+        )
+        .and_then(|p| p.edits.into_iter().find(|e| e.path == "src/lib.rs").map(|e| e.new_text))
+        .expect("failing `inc` assert should target `inc`");
+        assert!(
+            body_inc.contains("fn inc(") && body_inc.contains("+ 1;"),
+            "the `inc` stub is repaired to n+1: {body_inc}"
+        );
+        assert!(
+            body_inc.contains("pub fn dbl(n: i64) -> i64 {\n    n\n}"),
+            "`dbl` must stay a stub when the failure targets `inc`: {body_inc}"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -5656,7 +5786,7 @@ mod tests {
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
         // Aligned (array, scalar) -> array shape resolves via the front door (prose names the op)
         // OR the behaviour probe (mined asserts pin the unique library op), then reshapes cleanly.
-        let patch = try_test_mined_synthesis_patch(&task, &context, "the k largest elements")
+        let patch = try_test_mined_synthesis_patch(&task, &context, "the k largest elements", None)
             .or_else(|| {
                 crate::library_probe::try_library_behavior_patch(
                     &task,
@@ -5984,7 +6114,7 @@ mod tests {
         // Documents the CURRENT capability: a produced patch must come via the front door and
         // replace the identity stub; a None (reshape can't fit) is an honest decline, not a bug.
         if let Some(patch) =
-            try_test_mined_synthesis_patch(&task, &context, "reverse a list")
+            try_test_mined_synthesis_patch(&task, &context, "reverse a list", None)
         {
             assert!(
                 patch

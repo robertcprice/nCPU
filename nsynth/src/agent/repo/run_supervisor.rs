@@ -333,6 +333,7 @@ pub fn nl_synthesis_proposer_with_run(
                 task,
                 context,
                 &description,
+                analysis,
             )
         });
         if let Some(patch) = synth {
