@@ -283,7 +283,6 @@ pub fn try_mutation_repair_patch(
     files.sort_by_key(|(p, _)| {
         !preferred.as_deref().map(|pf| pf.ends_with(p) || p.ends_with(pf)).unwrap_or(false)
     });
-
     let mk_patch = |path: &str, orig: &str, mutated: String| {
         Some(
             RepairPatch::new()
@@ -1220,6 +1219,50 @@ fn generate_mutations(content: &str) -> Vec<String> {
     let code = &content[..test_start];
     let tail = &content[test_start..];
     let mut out = Vec::new();
+    // UNDERFLOW GUARD (real-bug class, model-FREE) — emitted FIRST (high value, and a big file yields
+    // thousands of operator mutations that would otherwise bury it past the search cap). A usize local
+    // used later as `VAR - 1` panics when it is 0 (an index/exponent computed from a float, as in
+    // bytesize's unit selection). For each `let VAR = <expr>;` whose VAR appears in `VAR - 1` afterwards,
+    // clamp it: `let mut VAR = <expr>; if VAR == 0 { VAR = 1; }` — the only correct fix (a `saturating_sub`
+    // on the index alone leaves an accompanying `pow(unit, VAR)` division wrong). Bounded.
+    {
+        let ub = code.as_bytes();
+        let mut scan = 0usize;
+        let mut made = 0usize;
+        while let Some(rel) = code[scan..].find("let ") {
+            let at = scan + rel;
+            scan = at + 4;
+            if at > 0 && (ub[at - 1].is_ascii_alphanumeric() || ub[at - 1] == b'_') {
+                continue;
+            }
+            let after = &code[at + 4..];
+            if after.trim_start().starts_with("mut ") {
+                continue;
+            }
+            let name: String = after
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            let Some(eq_rel) = after.find('=') else { continue };
+            let Some(semi_rel) = after[eq_rel..].find(';') else { continue };
+            let semi = at + 4 + eq_rel + semi_rel;
+            let rest = &code[semi..];
+            if !(rest.contains(&format!("{name} - 1")) || rest.contains(&format!("{name}-1"))) {
+                continue;
+            }
+            let stmt_tail = &code[at + 4..=semi];
+            let mutated = format!("let mut {stmt_tail} if {name} == 0 {{ {name} = 1; }}");
+            out.push(splice_mutation(code, tail, at, semi + 1 - at, &mutated));
+            made += 1;
+            if made >= 6 {
+                break;
+            }
+        }
+    }
     // Space-INSENSITIVE binary-operator swaps. Real Rust has `a+b`, `i<n`, `self.n=x` as often as the
     // spaced forms; a spaced-string match (` = `) silently MISSES the unspaced ones (this is why an
     // unspaced `self.n=x` off-by-op bug went unrepaired). Scan char by char, classify each operator
@@ -4610,6 +4653,20 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    #[test]
+    fn mutation_underflow_guard_clamps_a_usize_local() {
+        // A usize local used later as `VAR - 1` (a real panic bug, e.g. bytesize's unit exponent) gets
+        // the clamp mutation `let mut VAR = ...; if VAR == 0 { VAR = 1; }`. Emitted so it's tried before
+        // the thousands of operator swaps a large file produces.
+        let code = "impl X {\n  fn fmt(&self) -> String {\n    let exp = ((self.n as f64).ln() / 2.0) as usize;\n    format!(\"{}\", UNITS[exp - 1])\n  }\n}\n";
+        let muts = generate_mutations(code);
+        assert!(
+            muts.iter().any(|m| m.contains("let mut exp =") && m.contains("if exp == 0 { exp = 1; }")),
+            "no underflow-guard clamp among {} mutations",
+            muts.len()
+        );
+    }
 
     // --- literal + assert mining: array/slice/vec + owned-string forms (pure, deterministic) ---
 

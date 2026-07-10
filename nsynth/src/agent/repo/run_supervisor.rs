@@ -334,6 +334,23 @@ pub fn nl_synthesis_proposer_with_run(
         return Ok(patch);
     }
 
+    // MODEL-FREE tiers, BEFORE any model lane (exhaust the deterministic engine first). Multi-hole
+    // coordination fills coupled empty stubs; mutation repair fixes IN-PLACE logic bugs (wrong operator,
+    // off-by-one, missing edge guard, usize UNDERFLOW guard) by searching single/two-edit mutations of
+    // the buggy code — search + the cargo-test oracle, no model. This is the lane a real bug-fix on an
+    // existing function takes (e.g. bytesize's `exp==0` clamp), which the synthesis/library tiers above
+    // can't express (they re-derive a pure fn from examples, not repair existing logic).
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_multihole_fill_patch(task, context, analysis)
+    {
+        return Ok(patch);
+    }
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_mutation_repair_patch(task, context, analysis)
+    {
+        return Ok(patch);
+    }
+
     // GATED MODEL-INTENT side door (terminal, after every deterministic lane): an
     // optional local LLM proposes a SPEC (I/O examples), the engine synthesizes +
     // strictly verifies, and the cargo-test oracle still gates the patch. Inert
@@ -343,6 +360,19 @@ pub fn nl_synthesis_proposer_with_run(
     if let Some(patch) =
         crate::agent::synthesis_proposer::try_model_intent_patch(task, context, &description)
     {
+        return Ok(patch);
+    }
+
+    // GATED MODEL-REPAIR (compile-error repair loop): the model reads the failing CODE + the real
+    // cargo output and proposes a Rust edit, iterating on its own compiler errors (verified-or-refused;
+    // never ships unverified). Inert without NSYNTH_LOCAL_LLM_URL. Last resort, after every model-free
+    // lane and the model-intent side door.
+    if let Some(patch) = crate::agent::synthesis_proposer::try_model_repair_patch(
+        task,
+        context,
+        &description,
+        analysis,
+    ) {
         return Ok(patch);
     }
 
