@@ -222,13 +222,32 @@ pub fn load_templates_json(path: &Path) -> Result<Vec<MinedTemplate>, String> {
     serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
-/// Load templates from `NSYNTH_MINED_TEMPLATES` env (JSON path), if set.
+/// Load templates from `NSYNTH_MINED_TEMPLATES` env (JSON path), or fall back to
+/// `.nsynth/mined_templates.json` in the current working directory / home.
 pub fn load_templates_from_env() -> Option<Vec<MinedTemplate>> {
-    let path = std::env::var("NSYNTH_MINED_TEMPLATES").ok()?;
-    if path.is_empty() {
-        return None;
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if let Ok(path) = std::env::var("NSYNTH_MINED_TEMPLATES") {
+            if !path.is_empty() {
+                v.push(std::path::PathBuf::from(path));
+            }
+        }
+        v.push(std::path::PathBuf::from(".nsynth/mined_templates.json"));
+        if let Some(home) = std::env::var_os("HOME") {
+            v.push(std::path::PathBuf::from(home).join(".nsynth/mined_templates.json"));
+        }
+        v
+    };
+    for path in candidates {
+        if path.is_file() {
+            if let Ok(t) = load_templates_json(&path) {
+                if !t.is_empty() {
+                    return Some(t);
+                }
+            }
+        }
     }
-    load_templates_json(Path::new(&path)).ok()
+    None
 }
 
 /// Append one verified (task, code) row to `NSYNTH_HARVEST` JSONL (Phase-4 flywheel).
