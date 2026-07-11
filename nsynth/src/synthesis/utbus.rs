@@ -1425,6 +1425,7 @@ fn try_dual_and_pairwise(
         IndexScan::ArgMin,
         IndexScan::First,
         IndexScan::Last,
+        IndexScan::Mode,
     ] {
         let ok = inputs
             .iter()
@@ -1466,6 +1467,8 @@ enum IndexScan {
     First,
     /// Last element (empty → None).
     Last,
+    /// Most frequent value (first on a frequency tie; empty → None).
+    Mode,
 }
 
 impl IndexScan {
@@ -1480,6 +1483,7 @@ impl IndexScan {
             IndexScan::ArgMin => "argmin",
             IndexScan::First => "first",
             IndexScan::Last => "last",
+            IndexScan::Mode => "mode",
         }
     }
 
@@ -1569,6 +1573,26 @@ impl IndexScan {
             }
             IndexScan::First => arr.first().copied(),
             IndexScan::Last => arr.last().copied(),
+            IndexScan::Mode => {
+                if arr.is_empty() {
+                    return None;
+                }
+                let mut best_val = arr[0];
+                let mut best_count = 1i64;
+                for i in 0..arr.len() {
+                    let mut count = 0i64;
+                    for &v in arr {
+                        if v == arr[i] {
+                            count += 1;
+                        }
+                    }
+                    if count > best_count {
+                        best_count = count;
+                        best_val = arr[i];
+                    }
+                }
+                Some(best_val)
+            }
         }
     }
 
@@ -1681,6 +1705,29 @@ impl IndexScan {
             IndexScan::Last => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     return arr[arr.len - 1];\n\
+}}\n"
+            ),
+            IndexScan::Mode => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best_val: i64 = arr[0];\n\
+    best_count: i64 = 1;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        count: i64 = 0;\n\
+        j: i64 = 0;\n\
+        while j < arr.len {{\n\
+            if arr[j] == arr[i] {{\n\
+                count = count + 1;\n\
+            }}\n\
+            j = j + 1;\n\
+        }}\n\
+        if count > best_count {{\n\
+            best_count = count;\n\
+            best_val = arr[i];\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best_val;\n\
 }}\n"
             ),
         }
@@ -2712,6 +2759,8 @@ mod tests {
         assert_eq!(IndexScan::ArgMin.eval(&[1, 5, 3]), Some(0));
         assert_eq!(IndexScan::First.eval(&[7, 8]), Some(7));
         assert_eq!(IndexScan::Last.eval(&[7, 8]), Some(8));
+        assert_eq!(IndexScan::Mode.eval(&[1, 2, 2, 3, 2]), Some(2));
+        assert_eq!(IndexScan::Mode.eval(&[5, 5, 1, 1]), Some(5));
         assert_eq!(DualAccum::MinSubarraySum.eval(&[1, -2, 3, -4]), Some(-4));
         assert_eq!(DualAccum::SecondMin.eval(&[3, 1, 4, 1, 5]), Some(1));
         assert_eq!(PairwiseScan::CountDecreases.eval(&[5, 3, 4, 1]), Some(2));

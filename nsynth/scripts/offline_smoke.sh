@@ -296,6 +296,20 @@ fn index_argmin(arr: &[i64]) -> Option<i64> {
     Some(best_i as i64)
 }
 
+fn index_mode(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best_val = arr[0];
+    let mut best_count = 1i64;
+    for i in 0..arr.len() {
+        let count = arr.iter().filter(|&&v| v == arr[i]).count() as i64;
+        if count > best_count {
+            best_count = count;
+            best_val = arr[i];
+        }
+    }
+    Some(best_val)
+}
+
 fn k_kth_smallest(arr: &[i64], k: i64) -> Option<i64> {
     if k < 1 || k as usize > arr.len() { return None; }
     let mut s = arr.to_vec();
@@ -491,6 +505,8 @@ mod tests {
         assert_eq!(index_count_distinct(&[1, 2, 1, 3]), 3);
         assert_eq!(index_argmax(&[1, 5, 3]), Some(1));
         assert_eq!(index_argmin(&[1, 5, 3]), Some(0));
+        assert_eq!(index_mode(&[1, 2, 2, 3, 2]), Some(2));
+        assert_eq!(index_mode(&[5, 5, 1, 1]), Some(5));
         assert_eq!(k_kth_smallest(&[3, 1, 4, 1, 5], 2), Some(1));
         assert_eq!(k_first_index_of(&[1, 5, 3, 5], 5), 1);
         assert_eq!(k_first_index_of(&[1, 2], 9), -1);
