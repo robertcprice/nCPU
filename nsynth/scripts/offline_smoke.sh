@@ -945,6 +945,14 @@ fn dual_all_odd_non_negative(arr: &[i64]) -> i64 {
     if arr.iter().filter(|&&x| x % 2 != 0).all(|&x| x >= 0) { 1 } else { 0 }
 }
 
+fn dual_all_even_non_positive(arr: &[i64]) -> i64 {
+    if arr.iter().filter(|&&x| x % 2 == 0).all(|&x| x <= 0) { 1 } else { 0 }
+}
+
+fn dual_all_odd_non_positive(arr: &[i64]) -> i64 {
+    if arr.iter().filter(|&&x| x % 2 != 0).all(|&x| x <= 0) { 1 } else { 0 }
+}
+
 fn dual_min_abs(arr: &[i64]) -> i64 {
     arr.iter().map(|&x| x.abs()).min().unwrap_or(0)
 }
@@ -2245,8 +2253,11 @@ fn k_last_index_where_abs_ne(arr: &[i64], k: i64) -> i64 {
     -1
 }
 
-fn k_count_where_abs_eq(arr: &[i64], k: i64) -> i64 {
-    arr.iter().filter(|&&v| v.abs() == k).count() as i64
+fn k_first_index_where_abs_gt(arr: &[i64], k: i64) -> i64 {
+    for (i, &v) in arr.iter().enumerate() {
+        if v.abs() > k { return i as i64; }
+    }
+    -1
 }
 
 fn k_min_where_abs_eq(arr: &[i64], k: i64) -> i64 {
@@ -2547,6 +2558,9 @@ mod tests {
         assert_eq!(dual_all_even_non_negative(&[2, -3, 4]), 1);
         assert_eq!(dual_all_odd_non_negative(&[2, 3, -4]), 1);
         assert_eq!(dual_all_even_non_negative(&[-2, 3, 4]), 0);
+        assert_eq!(dual_all_even_non_positive(&[-2, 3, 0]), 1);
+        assert_eq!(dual_all_odd_non_positive(&[2, -3, -5]), 1);
+        assert_eq!(dual_all_even_non_positive(&[2, -3, 0]), 0);
         assert_eq!(dual_min_abs(&[-3, 9, 2]), 2);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
@@ -2682,7 +2696,7 @@ mod tests {
         assert_eq!(k_last_index_where_abs_eq(&[-4, 2, 4], 4), 2);
         assert_eq!(k_first_index_where_abs_ne(&[-4, 2, 4], 4), 1);
         assert_eq!(k_last_index_where_abs_ne(&[-4, 2, 4], 4), 1);
-        assert_eq!(k_count_where_abs_eq(&[-4, 2, 4], 4), 2);
+        assert_eq!(k_first_index_where_abs_gt(&[-1, 2, 5], 4), 2);
         assert_eq!(index_sum_abs_odd_value_even(&[-3, 8, 5, 2]), 8);
         assert_eq!(index_sum_abs_odd_value_odd(&[-3, 9, 5, 7]), 16);
         assert_eq!(k_min_where_abs_eq(&[5, -5, 2], 5), -5);
@@ -3139,6 +3153,10 @@ fn join_with_slash_arrow(s: &str, sep: &str) -> String {
     s.split(sep).collect::<Vec<_>>().join("/>")
 }
 
+fn join_with_percent_arrow(s: &str, sep: &str) -> String {
+    s.split(sep).collect::<Vec<_>>().join("%>")
+}
+
 fn sort_words_desc(s: &str, sep: &str) -> String {
     let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
     owned.sort();
@@ -3579,6 +3597,10 @@ fn control_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_control()).count() as i64
 }
 
+fn graph_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_graphic()).count() as i64
+}
+
 fn punct_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_punctuation()).count() as i64
 }
@@ -3667,6 +3689,7 @@ c");
         assert_eq!(join_with_tilde_arrow("a b c", " "), "a~>b~>c");
         assert_eq!(join_with_star_arrow("a b c", " "), "a*>b*>c");
         assert_eq!(join_with_slash_arrow("a b c", " "), "a/>b/>c");
+        assert_eq!(join_with_percent_arrow("a b c", " "), "a%>b%>c");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
@@ -3781,6 +3804,7 @@ c");
         assert_eq!(bin_count("01012x"), 4);
         assert_eq!(punct_count("a,b!c?"), 3);
         assert_eq!(control_count("a\x01b\x7fc"), 2);
+        assert_eq!(graph_count("a b!"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
