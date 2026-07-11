@@ -1305,6 +1305,14 @@ fn index_sum_abs_even_value_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v%2==0).map(|(_,&v)| v.abs()).sum()
 }
 
+fn index_sum_abs_odd_value_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==0 && v%2!=0).map(|(_,&v)| v.abs()).sum()
+}
+
+fn index_sum_abs_odd_value_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v%2!=0).map(|(_,&v)| v.abs()).sum()
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1596,6 +1604,16 @@ fn k_max_where_abs_eq(arr: &[i64], k: i64) -> i64 {
     for &v in arr {
         if v.abs() == k {
             if !found || v > best { best = v; found = true; }
+        }
+    }
+    best
+}
+
+fn k_min_where_abs_eq(arr: &[i64], k: i64) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for &v in arr {
+        if v.abs() == k {
+            if !found || v < best { best = v; found = true; }
         }
     }
     best
@@ -1898,6 +1916,9 @@ mod tests {
         assert_eq!(index_sum_abs_even_value_even(&[-4, 9, 2, 8]), 6);
         assert_eq!(index_sum_abs_even_value_odd(&[-4, 9, 2, 8]), 8);
         assert_eq!(k_max_where_abs_eq(&[5, -5, 2], 5), 5);
+        assert_eq!(index_sum_abs_odd_value_even(&[-3, 8, 5, 2]), 8);
+        assert_eq!(index_sum_abs_odd_value_odd(&[-3, 9, 5, 7]), 16);
+        assert_eq!(k_min_where_abs_eq(&[5, -5, 2], 5), -5);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -2172,6 +2193,10 @@ fn join_with_hyphen(s: &str, sep: &str) -> String {
     s.split(sep).collect::<Vec<_>>().join("-")
 }
 
+fn join_with_underscore(s: &str, sep: &str) -> String {
+    s.split(sep).collect::<Vec<_>>().join("_")
+}
+
 fn sort_words_desc(s: &str, sep: &str) -> String {
     let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
     owned.sort();
@@ -2444,6 +2469,10 @@ fn bracket_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '[').count() as i64
 }
 
+fn paren_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '(').count() as i64
+}
+
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
@@ -2483,6 +2512,7 @@ mod tests {
         assert_eq!(rotate_right_words("a b c", " "), "c a b");
         assert_eq!(take_middle_two("a b c d e", " "), "b c");
         assert_eq!(join_with_hyphen("a b c", " "), "a-b-c");
+        assert_eq!(join_with_underscore("a b c", " "), "a_b_c");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
@@ -2554,6 +2584,7 @@ mod tests {
         assert_eq!(pipe_count("a|b||c"), 3);
         assert_eq!(brace_count("a{b{{c"), 3);
         assert_eq!(bracket_count("a[b[[c"), 3);
+        assert_eq!(paren_count("a(b((c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

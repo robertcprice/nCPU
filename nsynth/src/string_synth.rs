@@ -806,6 +806,8 @@ enum WordShape {
     TakeMiddleTwo,
     /// Join words with a hyphen regardless of input sep.
     JoinWithHyphen,
+    /// Join words with an underscore regardless of input sep.
+    JoinWithUnderscore,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -877,6 +879,7 @@ impl WordShape {
             WordShape::RotateRightWords => "rotate_right_words",
             WordShape::TakeMiddleTwo => "take_middle_two",
             WordShape::JoinWithHyphen => "join_with_hyphen",
+            WordShape::JoinWithUnderscore => "join_with_underscore",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1266,6 +1269,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             }
         }
         WordShape::JoinWithHyphen => words.join("-"),
+        WordShape::JoinWithUnderscore => words.join("_"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1471,6 +1475,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithHyphen => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"-\");\n}}\n"
         ),
+        WordShape::JoinWithUnderscore => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"_\");\n}}\n"
+        ),
 WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1501,7 +1508,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 64] = [
+    const SHAPES: [WordShape; 65] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1564,6 +1571,7 @@ pub fn synthesize_word_program(
         WordShape::RotateRightWords,
         WordShape::TakeMiddleTwo,
         WordShape::JoinWithHyphen,
+        WordShape::JoinWithUnderscore,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -3128,6 +3136,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-bracket_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Open-paren count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '(').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"(\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-paren_count".to_string(),
                 error: None,
             });
         }
