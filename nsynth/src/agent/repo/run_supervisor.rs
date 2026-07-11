@@ -329,6 +329,19 @@ pub fn nl_synthesis_proposer_with_run(
             crate::agent::synthesis_proposer::try_real_synthesis_patch(task, context, &description)
         })
         .or_else(|| {
+            // COMPOUND / MULTI-FUNCTION: a single failing assert naming two+ functions
+            // (`assert_eq!(add(..) + sub(..), N)`) can't be repaired one-fn-at-a-time — the assert
+            // stays red until BOTH are fixed. This fixes every function the failing asserts name in
+            // one atomic, cargo-gated patch. Declines (→ single-fn path below) unless ≥2 functions are
+            // actually repaired, so single-function crates are untouched.
+            crate::agent::synthesis_proposer::try_multifn_mined_patch(
+                task,
+                context,
+                &description,
+                analysis,
+            )
+        })
+        .or_else(|| {
             crate::agent::synthesis_proposer::try_test_mined_synthesis_patch(
                 task,
                 context,

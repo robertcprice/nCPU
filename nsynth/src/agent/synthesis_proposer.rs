@@ -2439,6 +2439,21 @@ fn asserted_fn_at_failure(
     context: &RepairContext,
     analysis: Option<&FailureAnalysis>,
 ) -> Option<String> {
+    let window = failing_assert_window(context, analysis)?;
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    accumulate_asserted_call_names(&window, &mut counts);
+    counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n)
+}
+
+/// The small source window around the CURRENT failing assert (`analysis` file:line): the failing line
+/// plus a couple after it, to cover a multi-line `assert_eq!`. `None` when there is no analysis/line or
+/// the implicated file isn't in context. Both the single-fn localizer and the multi-function repair
+/// read the functions the FAILING TEST names from this window — the repo's own test decides which
+/// function(s) to fix, never the prose.
+fn failing_assert_window(
+    context: &RepairContext,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<String> {
     let a = analysis?;
     let file = a.file.as_deref()?;
     let line = a.line? as usize; // 1-based
@@ -2456,10 +2471,97 @@ fn asserted_fn_at_failure(
     }
     let start = line - 1;
     let end = (start + 3).min(lines.len());
-    let window = lines[start..end].join("\n");
+    Some(lines[start..end].join("\n"))
+}
+
+/// COMPOUND / MULTI-FUNCTION repair, grounded in the REPO — not the prose. A single failing assert can
+/// name TWO OR MORE distinct functions (`assert_eq!(add(2, 3) + sub(9, 4), 10)`); the per-iteration
+/// single-function localizer can only fix one and the assert keeps failing (the loop stalls). This
+/// stage fixes ALL the functions the failing assert (or, failing that, the whole crate's asserts) names,
+/// in ONE atomic patch. The set of functions comes entirely from the asserted call-names
+/// (`accumulate_asserted_call_names`) — the repo's own tests decide "how many functions", never a regex
+/// on "and". Each function is synthesized + strict-verified independently and the fixes are CHAINED onto
+/// the file's text, so the single emitted edit is behavior-checked as a unit by the real cargo test.
+/// Returns None (single-function path handles it) unless at least TWO functions are actually repaired,
+/// so it never fires — nor over-splits — on an ordinary single-function crate.
+pub fn try_multifn_mined_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<RepairPatch> {
+    let intent = CodingIntent::from_nl_lenient(description).ok();
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let original = read_relative_file(context, &target).ok()?;
+
+    // Candidate functions come from the REPO's asserts: the distinct call-names in the FAILING assert
+    // first (most precise — exactly the functions this failure implicates), else every asserted
+    // call-name in the crate. This is the emergent "how many functions" signal; prose is never parsed.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    accumulate_asserted_call_names(&window, &mut counts);
-    counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n)
+    if let Some(window) = failing_assert_window(context, analysis) {
+        accumulate_asserted_call_names(&window, &mut counts);
+    }
+    if counts.len() < 2 {
+        counts.clear();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                accumulate_asserted_call_names(t, &mut counts);
+            }
+        }
+    }
+    // Only functions DEFINED in the target file can be chained into one single-file edit here; a
+    // function that lives elsewhere is left to the per-iteration single-fn path (which retargets it).
+    let mut candidates: Vec<String> = counts
+        .into_keys()
+        .filter(|n| original.contains(&format!("fn {n}(")) || original.contains(&format!("fn {n} ")))
+        .collect();
+    candidates.sort(); // deterministic
+    if candidates.len() < 2 {
+        return None;
+    }
+
+    // Chain each function's verified fix onto the accumulating file text. `synthesize_mined_for_fn`
+    // reshapes onto the text we pass as `picked_old_text`, and does NOT retarget when the function is
+    // defined there (it is — we filtered to target-defined fns), so each fix composes on the previous.
+    let mut acc = original.clone();
+    let mut fixed = 0usize;
+    for repo_fn in &candidates {
+        let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows.extend(mine_asserts(t, repo_fn));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        if rows.len() < 2 {
+            continue;
+        }
+        if let Some(patch) =
+            synthesize_mined_for_fn(context, description, repo_fn, rows, &target, &acc)
+        {
+            if let Some(edit) = patch.edits.iter().find(|e| e.path == target) {
+                if edit.new_text != acc {
+                    acc = edit.new_text.clone();
+                    fixed += 1;
+                }
+            }
+        }
+    }
+    if fixed < 2 || acc == original {
+        return None;
+    }
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                original,
+                acc,
+                "multi-function test-mined synthesis (each fn verified; whole patch cargo-gated)",
+            ))
+            .with_metadata("proposer", "nl_multifn_test_mined")
+            .with_metadata("functions_fixed", fixed.to_string()),
+    )
 }
 
 /// Synthesize one verified repair for `repo_fn` from its mined I/O `rows`. Returns `None` when the
@@ -5747,6 +5849,125 @@ mod tests {
         assert!(
             body_inc.contains("pub fn dbl(n: i64) -> i64 {\n    n\n}"),
             "`dbl` must stay a stub when the failure targets `inc`: {body_inc}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// COMPOUND repair grounded in the REPO, not the prose. A crate with TWO broken functions
+    /// (`add`, `sub`), each isolated by its own asserts inside one test. The failing test names both
+    /// functions, so `try_multifn_mined_patch` fixes BOTH in a single atomic patch (independent of
+    /// `max_iterations`). The "how many functions" decision comes from the asserted call-names — never
+    /// a regex on the word "and" in the issue text.
+    #[test]
+    fn multifn_repairs_every_function_the_failing_asserts_name_in_one_patch() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_compound_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"cp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // add asserts on lines 14-15, sub asserts on 16-17 (1-based).
+        let src = "pub fn add(a: i64, b: i64) -> i64 {\n    0\n}\n\npub fn sub(a: i64, b: i64) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::{add, sub};\n    #[test]\n    fn t() {\n        assert_eq!(add(2, 3), 5);\n        assert_eq!(add(10, 1), 11);\n        assert_eq!(sub(9, 4), 5);\n        assert_eq!(sub(10, 3), 7);\n    }\n}\n";
+        fs::write(root.join("src/lib.rs"), src).expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "cp".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the add and subtract functions".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 1, // ONE iteration must fix BOTH — proves the single atomic patch
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let fail = FailureAnalysis {
+            kind: FailureKind::TestFailure,
+            file: Some("src/lib.rs".into()),
+            line: Some(14), // the first failing assert (add)
+            message: String::new(),
+            likely_cause: String::new(),
+            suggested_action: String::new(),
+        };
+        let patch = try_multifn_mined_patch(
+            &task,
+            &context,
+            "fix the add and subtract functions",
+            Some(&fail),
+        )
+        .expect("compound stage should repair both `add` and `sub` in one patch");
+        assert_eq!(patch.edits.len(), 1, "one atomic single-file edit");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "functions_fixed" && v == "2"),
+            "two functions repaired: {:?}",
+            patch.metadata
+        );
+        let new_text = &patch.edits[0].new_text;
+        // both stubs replaced: add -> a+b, sub -> a-b (neither left as `0`)
+        assert!(
+            new_text.contains("fn add(a: i64, b: i64) -> i64 {") && new_text.contains("a + b"),
+            "`add` repaired to a+b: {new_text}"
+        );
+        assert!(
+            new_text.contains("fn sub(a: i64, b: i64) -> i64 {") && new_text.contains("a - b"),
+            "`sub` repaired to a-b: {new_text}"
+        );
+        assert!(
+            !new_text.contains("-> i64 {\n    0\n}"),
+            "no stub body (`0`) may remain — both functions fixed: {new_text}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// DISTINGUISHING NEGATIVE: a single-function crate must NOT trigger the compound stage — there is
+    /// exactly one asserted function, so `try_multifn_mined_patch` declines (returns None) and the
+    /// single-function path handles it. Proves the stage keys off the REPO's function count, so it can
+    /// never over-split an ordinary one-function repair.
+    #[test]
+    fn multifn_declines_on_a_single_function_crate() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_compound_neg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"cn\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(2), 5);\n        assert_eq!(mystery(3), 7);\n        assert_eq!(mystery(4), 9);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "cn".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the mystery function".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let fail = FailureAnalysis {
+            kind: FailureKind::TestFailure,
+            file: Some("src/lib.rs".into()),
+            line: Some(8),
+            message: String::new(),
+            likely_cause: String::new(),
+            suggested_action: String::new(),
+        };
+        assert!(
+            try_multifn_mined_patch(&task, &context, "fix the mystery function", Some(&fail))
+                .is_none(),
+            "a single-function crate must NOT trigger the compound stage (no over-split)"
         );
         let _ = fs::remove_dir_all(&root);
     }
