@@ -745,6 +745,8 @@ enum DualAccum {
     SumPositives,
     /// Sum of negative elements.
     SumNegatives,
+    /// Count of odd elements.
+    CountOdds,
 }
 
 impl DualAccum {
@@ -770,6 +772,7 @@ impl DualAccum {
             DualAccum::CountEvens => "count_evens",
             DualAccum::SumPositives => "sum_positives",
             DualAccum::SumNegatives => "sum_negatives",
+            DualAccum::CountOdds => "count_odds",
         }
     }
 
@@ -955,6 +958,9 @@ impl DualAccum {
                     .copied()
                     .fold(0i64, i64::saturating_add),
             ),
+            DualAccum::CountOdds => {
+                Some(arr.iter().filter(|&&x| x % 2 != 0).count() as i64)
+            }
         }
     }
 
@@ -1217,6 +1223,15 @@ impl DualAccum {
         if item < 0 {{ total = total + item; }}\n\
     }}\n\
     return total;\n\
+}}\n"
+            ),
+            DualAccum::CountOdds => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{ count = count + 1; }}\n\
+    }}\n\
+    return count;\n\
 }}\n"
             ),
         }
@@ -1624,6 +1639,7 @@ fn try_dual_and_pairwise(
         DualAccum::CountEvens,
         DualAccum::SumPositives,
         DualAccum::SumNegatives,
+        DualAccum::CountOdds,
     ] {
         let ok = inputs
             .iter()
@@ -3126,5 +3142,6 @@ mod tests {
         assert_eq!(DualAccum::CountEvens.eval(&[1, 2, 3, 4, 0]), Some(3));
         assert_eq!(DualAccum::SumPositives.eval(&[-1, 2, 3, -4]), Some(5));
         assert_eq!(DualAccum::SumNegatives.eval(&[-1, 2, 3, -4]), Some(-5));
+        assert_eq!(DualAccum::CountOdds.eval(&[1, 2, 3, 4, 0]), Some(2));
     }
 }
