@@ -749,6 +749,8 @@ enum DualAccum {
     CountOdds,
     /// Length of the array.
     Len,
+    /// Whether the array is empty (1/0).
+    IsEmpty,
 }
 
 impl DualAccum {
@@ -776,6 +778,7 @@ impl DualAccum {
             DualAccum::SumNegatives => "sum_negatives",
             DualAccum::CountOdds => "count_odds",
             DualAccum::Len => "len",
+            DualAccum::IsEmpty => "is_empty",
         }
     }
 
@@ -965,6 +968,7 @@ impl DualAccum {
                 Some(arr.iter().filter(|&&x| x % 2 != 0).count() as i64)
             }
             DualAccum::Len => Some(arr.len() as i64),
+            DualAccum::IsEmpty => Some(if arr.is_empty() { 1 } else { 0 }),
         }
     }
 
@@ -1241,6 +1245,12 @@ impl DualAccum {
             DualAccum::Len => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     return arr.len;\n\
+}}\n"
+            ),
+            DualAccum::IsEmpty => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 1; }}\n\
+    return 0;\n\
 }}\n"
             ),
         }
@@ -1650,6 +1660,7 @@ fn try_dual_and_pairwise(
         DualAccum::SumNegatives,
         DualAccum::CountOdds,
         DualAccum::Len,
+        DualAccum::IsEmpty,
     ] {
         let ok = inputs
             .iter()
