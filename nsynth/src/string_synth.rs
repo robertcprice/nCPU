@@ -882,6 +882,7 @@ enum WordShape {
     JoinWithSlashEq,
     JoinWithPercentEq,
     JoinWithAmpEq,
+    JoinWithCaretEq,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1011,6 +1012,7 @@ impl WordShape {
             WordShape::JoinWithSlashEq => "join_with_slash_eq",
             WordShape::JoinWithPercentEq => "join_with_percent_eq",
             WordShape::JoinWithAmpEq => "join_with_amp_eq",
+            WordShape::JoinWithCaretEq => "join_with_caret_eq",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1458,6 +1460,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithSlashEq => words.join("/="),
         WordShape::JoinWithPercentEq => words.join("%="),
         WordShape::JoinWithAmpEq => words.join("&="),
+        WordShape::JoinWithCaretEq => words.join("^="),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1837,6 +1840,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithAmpEq => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"&=\");\n}}\n"
         ),
+        WordShape::JoinWithCaretEq => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"^=\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1867,7 +1873,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 122] = [
+    const SHAPES: [WordShape; 123] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1988,6 +1994,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithSlashEq,
         WordShape::JoinWithPercentEq,
         WordShape::JoinWithAmpEq,
+        WordShape::JoinWithCaretEq,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2392,6 +2399,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Eight digit count (char '8').
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '8').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"8\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-eight_digit_count".to_string(),
                 error: None,
             });
         }
