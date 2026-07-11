@@ -367,6 +367,18 @@ fn dual_last_negative(arr: &[i64]) -> i64 {
     0
 }
 
+fn dual_max_positive(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for &x in arr {
+        if x > 0 && (!found || x > best) {
+            best = x;
+            found = true;
+        }
+    }
+    best
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -857,6 +869,7 @@ mod tests {
         assert_eq!(dual_last_positive(&[-2, 0, 5, 3]), 3);
         assert_eq!(dual_first_negative(&[2, -4, -1]), -4);
         assert_eq!(dual_last_negative(&[2, -4, -1, 5]), -1);
+        assert_eq!(dual_max_positive(&[-2, 5, 3, 0]), 5);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1022,6 +1035,14 @@ fn upper_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_uppercase()).count() as i64
 }
 
+fn lower_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_lowercase()).count() as i64
+}
+
+fn vowel_count(s: &str) -> i64 {
+    s.chars().filter(|c| matches!(c.to_ascii_lowercase(), 'a'|'e'|'i'|'o'|'u')).count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1058,6 +1079,8 @@ mod tests {
         assert_eq!(drop_last_two("one two three four", " "), "one two");
         assert_eq!(digit_count("a1b22"), 3);
         assert_eq!(upper_count("Hi There"), 2);
+        assert_eq!(lower_count("Hi There"), 5);
+        assert_eq!(vowel_count("Beautiful"), 5);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

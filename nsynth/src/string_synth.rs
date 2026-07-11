@@ -1570,6 +1570,82 @@ pub fn synthesize_string_int_program(
             });
         }
     }
+    // Lowercase letter count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_lowercase()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-lower_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Vowel count (aeiouAEIOU).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c == \"a\" {{\n\
+            n = n + 1;\n\
+        }} else {{\n\
+            if c == \"e\" {{\n\
+                n = n + 1;\n\
+            }} else {{\n\
+                if c == \"i\" {{\n\
+                    n = n + 1;\n\
+                }} else {{\n\
+                    if c == \"o\" {{\n\
+                        n = n + 1;\n\
+                    }} else {{\n\
+                        if c == \"u\" {{\n\
+                            n = n + 1;\n\
+                        }}\n\
+                    }}\n\
+                }}\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-vowel_count".to_string(),
+                error: None,
+            });
+        }
+    }
     // Word count: nonempty segments after split. Prefer trim-aware counting so
     // `"  two words  "` → 2 (naive `.split(" ").count()` would be 4).
     for sep in [" ", "-", "_", ",", "/"] {

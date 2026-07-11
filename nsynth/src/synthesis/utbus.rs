@@ -791,6 +791,8 @@ enum DualAccum {
     FirstNegative,
     /// Last strictly-negative element (none → 0).
     LastNegative,
+    /// Maximum among strictly-positive elements (none → 0).
+    MaxPositive,
 }
 
 impl DualAccum {
@@ -839,6 +841,7 @@ impl DualAccum {
             DualAccum::LastPositive => "last_positive",
             DualAccum::FirstNegative => "first_negative",
             DualAccum::LastNegative => "last_negative",
+            DualAccum::MaxPositive => "max_positive",
         }
     }
 
@@ -868,6 +871,7 @@ impl DualAccum {
                 | DualAccum::MaxAbs
                 | DualAccum::MinPositive
                 | DualAccum::MaxNegative
+                | DualAccum::MaxPositive
                 | DualAccum::SumEvenValues
                 | DualAccum::SumOddValues
                 | DualAccum::AlternatingSum
@@ -1194,6 +1198,19 @@ impl DualAccum {
                     }
                 }
                 Some(0)
+            }
+            DualAccum::MaxPositive => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x > 0 {
+                        if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -1691,6 +1708,25 @@ impl DualAccum {
         i = i - 1;\n\
     }}\n\
     return 0;\n\
+}}\n"
+            ),
+            DualAccum::MaxPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item > best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
 }}\n"
             ),
         }
@@ -2320,6 +2356,7 @@ fn try_dual_and_pairwise(
         DualAccum::LastPositive,
         DualAccum::FirstNegative,
         DualAccum::LastNegative,
+        DualAccum::MaxPositive,
     ] {
         let ok = inputs
             .iter()
@@ -4206,5 +4243,7 @@ mod tests {
         assert_eq!(KClosed::SumEqK.eval(&[2, 5, 2, 2], 2), Some(6));
         assert_eq!(IndexScan::ArgMaxAbs.eval(&[1, -9, 3]), Some(1));
         assert_eq!(IndexScan::ArgMaxAbs.eval(&[-2, 5, -8]), Some(2));
+        assert_eq!(DualAccum::MaxPositive.eval(&[-2, 5, 3, 0]), Some(5));
+        assert_eq!(DualAccum::MaxPositive.eval(&[-1, 0]), Some(0));
     }
 }
