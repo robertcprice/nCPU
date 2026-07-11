@@ -918,6 +918,8 @@ enum WordShape {
     JoinWithDollarBang,
     /// Join words with "^!".
     JoinWithCaretBang,
+    /// Join words with "|!".
+    JoinWithPipeBang,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1078,6 +1080,7 @@ impl WordShape {
             WordShape::JoinWithAtBang => "join_with_at_bang",
             WordShape::JoinWithDollarBang => "join_with_dollar_bang",
             WordShape::JoinWithCaretBang => "join_with_caret_bang",
+            WordShape::JoinWithPipeBang => "join_with_pipe_bang",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1556,6 +1559,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithAtBang => words.join("@!"),
         WordShape::JoinWithDollarBang => words.join("$!"),
         WordShape::JoinWithCaretBang => words.join("^!"),
+        WordShape::JoinWithPipeBang => words.join("|!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -2028,6 +2032,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithCaretBang => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"^!\");\n}}\n"
         ),
+        WordShape::JoinWithPipeBang => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"|!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -2210,6 +2217,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithAtBang,
         WordShape::JoinWithDollarBang,
         WordShape::JoinWithCaretBang,
+        WordShape::JoinWithPipeBang,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -6054,6 +6062,40 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-non_bin_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Non-whitespace character count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|&c| c != ' ' && c != '\t' && c != '\n' && c != '\r').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c != \" \" {{\n\
+            if c != \"\\t\" {{\n\
+                if c != \"\\n\" {{\n\
+                    if c != \"\\r\" {{\n\
+                        n = n + 1;\n\
+                    }}\n\
+                }}\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-non_space_count".to_string(),
                 error: None,
             });
         }
