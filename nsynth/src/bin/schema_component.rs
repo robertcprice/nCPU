@@ -13,6 +13,7 @@
 //!   e.g. schema_component "a todo list where each task has a title and a priority number and a done flag"
 //! Then:  coding_agent --root <out_dir> query "fix the failing tests"   # fills + verifies
 
+use mog_synth::agent::{CodingAgentSession, GuardrailPolicy};
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -257,11 +258,16 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let prose = args.get(1).cloned().unwrap_or_default();
     if prose.trim().is_empty() {
-        eprintln!("usage: schema_component \"<prose schema>\" [out_dir]");
+        eprintln!("usage: schema_component \"<prose schema>\" [out_dir] [--no-fill]");
         std::process::exit(2);
     }
+    // `--no-fill` keeps the old emit-only behavior; by default this now runs the WHOLE Phase-2 loop
+    // (prose -> schema -> crate -> fill -> verify) as ONE command and reports the verified result.
+    let no_fill = args.iter().any(|a| a == "--no-fill");
     let out_dir = args
-        .get(2)
+        .iter()
+        .skip(2)
+        .find(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("schema_component_out"));
 
@@ -287,7 +293,73 @@ fn main() {
     let field_list: Vec<String> = fields.iter().map(|f| format!("{}:{}", f.name, f.ty.rust())).collect();
     println!("schema: {collection} {{ items: Vec<{record}> }}  record {record} {{ {} }}", field_list.join(", "));
     println!("wrote crate to {}", out_dir.display());
-    println!("fill + verify:  coding_agent --root {} query \"fix the failing tests\"", out_dir.display());
+
+    if no_fill {
+        println!("fill + verify:  coding_agent --root {} query \"fix the failing tests\"", out_dir.display());
+        return;
+    }
+
+    // FILL + VERIFY in-process — the same path `coding_agent --root <dir> query "fix the failing tests"`
+    // drives. The emitted crate is a struct + empty-body method stubs + one test per method; the
+    // model-free engine fills every body against those tests, cargo-gated. One command now yields a
+    // VERIFIED working crate, not a scaffold plus instructions.
+    println!("filling {} method bodies (model-free) ...", count_stub_methods(&lib));
+    let mut session = match CodingAgentSession::load(&out_dir, GuardrailPolicy::default(), "schema") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("session load failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    let result = session.handle_query("fix the failing tests");
+    // Independently re-run the crate's own test suite so the reported result is cargo's, not ours.
+    let verified = std::process::Command::new("cargo")
+        .arg("test")
+        .current_dir(&out_dir)
+        .output();
+    match verified {
+        Ok(out) => {
+            // `cargo test` prints one `test result:` line PER binary (lib unit tests, then the empty
+            // Doc-tests). Sum across all of them rather than taking one line, so the report reflects
+            // the whole suite, not the trailing 0-test doc block.
+            let text = String::from_utf8_lossy(&out.stdout);
+            let (mut passed, mut failed) = (0u32, 0u32);
+            for line in text.lines().filter(|l| l.contains("test result:")) {
+                passed += count_before(line, "passed");
+                failed += count_before(line, "failed");
+            }
+            if out.status.success() && failed == 0 {
+                println!(
+                    "VERIFIED  {passed} tests passing, 0 failing  (repair route: {:?}, success: {})",
+                    result.route, result.success
+                );
+            } else {
+                println!(
+                    "NOT GREEN  {passed} passing, {failed} failing — some bodies left unfilled (honest refusal, no wrong code shipped)"
+                );
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("cargo test could not run: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The integer immediately preceding `word` in a `cargo` "N passed; M failed" summary line, or 0.
+fn count_before(line: &str, word: &str) -> u32 {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    toks.windows(2)
+        .find(|w| w[1].trim_end_matches(&[';', ','][..]) == word)
+        .and_then(|w| w[0].parse().ok())
+        .unwrap_or(0)
+}
+
+/// Count the empty-body method stubs (`{}` right after a signature) the engine must fill — for a
+/// one-line "filling N method bodies" progress note. Heuristic display only.
+fn count_stub_methods(lib: &str) -> usize {
+    lib.matches(") {}").count() + lib.matches("-> i64 {}").count() + lib.matches("-> bool {}").count()
 }
 
 #[cfg(test)]
