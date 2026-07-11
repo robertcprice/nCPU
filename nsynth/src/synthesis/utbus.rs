@@ -735,6 +735,8 @@ enum DualAccum {
     AbsSum,
     /// Maximum absolute value.
     MaxAbs,
+    /// Minimum strictly-positive element (none → None).
+    MinPositive,
 }
 
 impl DualAccum {
@@ -755,6 +757,7 @@ impl DualAccum {
             DualAccum::SumSquares => "sum_squares",
             DualAccum::AbsSum => "abs_sum",
             DualAccum::MaxAbs => "max_abs",
+            DualAccum::MinPositive => "min_positive",
         }
     }
 
@@ -908,6 +911,20 @@ impl DualAccum {
                     .fold(0i64, i64::saturating_add),
             ),
             DualAccum::MaxAbs => Some(arr.iter().copied().map(|x| x.abs()).max().unwrap_or(0)),
+            DualAccum::MinPositive => {
+                // Mirror search_catalog: 0 when no positive element exists.
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x > 0 {
+                        if !found || x < best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
         }
     }
 
@@ -1115,6 +1132,23 @@ impl DualAccum {
         if v < 0 {{ v = 0 - v; }}\n\
         if v > best {{ best = v; }}\n\
         i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MinPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item < best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
     }}\n\
     return best;\n\
 }}\n"
@@ -1519,6 +1553,7 @@ fn try_dual_and_pairwise(
         DualAccum::SumSquares,
         DualAccum::AbsSum,
         DualAccum::MaxAbs,
+        DualAccum::MinPositive,
     ] {
         let ok = inputs
             .iter()
@@ -3015,5 +3050,7 @@ mod tests {
         assert_eq!(DualAccum::AbsSum.eval(&[5, 0, -2]), Some(7));
         assert_eq!(DualAccum::MaxAbs.eval(&[-1, 2, -5]), Some(5));
         assert_eq!(DualAccum::MaxAbs.eval(&[3, -2]), Some(3));
+        assert_eq!(DualAccum::MinPositive.eval(&[-2, 5, 3, 0]), Some(3));
+        assert_eq!(DualAccum::MinPositive.eval(&[-1, 0]), Some(0));
     }
 }
