@@ -45,12 +45,14 @@ use super::*;
 /// Whether the UTBUS path is enabled. Reads `NSYNTH_UTBUS`:
 /// - `"1"` — full Phase A (closed families + filter→map→reduce enum)
 /// - `"closed"` — closed families only (dual/pairwise/index/k)
-/// - anything else / unset — off (legacy path unchanged)
+/// - `"0"` / unset — off (legacy path unchanged; product bins default to `closed`)
 fn utbus_mode() -> Option<&'static str> {
     match std::env::var("NSYNTH_UTBUS").ok().as_deref() {
         Some("1") => Some("full"),
         Some("closed") => Some("closed"),
-        _ => None,
+        Some("0") | None => None,
+        // Treat unknown values as off (never-wrong: don't surprise).
+        Some(_) => None,
     }
 }
 

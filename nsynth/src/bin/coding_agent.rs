@@ -45,6 +45,11 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn main() {
+    // Product default: cheap UTBUS closed families (A3/A4/A5/k). Override with
+    // NSYNTH_UTBUS=1 (full enum) or NSYNTH_UTBUS=0 (legacy-only).
+    if env::var_os("NSYNTH_UTBUS").is_none() {
+        unsafe { env::set_var("NSYNTH_UTBUS", "closed") };
+    }
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         usage();

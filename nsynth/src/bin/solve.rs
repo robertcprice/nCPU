@@ -36,6 +36,9 @@ Union: ship if either lane verifies."
 }
 
 fn main() {
+    if env::var_os("NSYNTH_UTBUS").is_none() {
+        unsafe { env::set_var("NSYNTH_UTBUS", "closed") };
+    }
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         usage();
