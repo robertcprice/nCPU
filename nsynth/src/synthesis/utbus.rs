@@ -1109,6 +1109,10 @@ enum DualAccum {
     SumFourthPowersEvenNonZero,
     /// Sum of fourth powers of odd-valued non-zero elements.
     SumFourthPowersOddNonZero,
+    /// Product of fourth powers of even-valued non-zero elements (none → 1).
+    ProductFourthPowersEvenNonZero,
+    /// Product of fourth powers of odd-valued non-zero elements (none → 1).
+    ProductFourthPowersOddNonZero,
 }
 
 impl DualAccum {
@@ -1316,6 +1320,8 @@ impl DualAccum {
             DualAccum::ProductCubesOddNonZero => "product_cubes_odd_non_zero",
             DualAccum::SumFourthPowersEvenNonZero => "sum_fourth_powers_even_non_zero",
             DualAccum::SumFourthPowersOddNonZero => "sum_fourth_powers_odd_non_zero",
+            DualAccum::ProductFourthPowersEvenNonZero => "product_fourth_powers_even_non_zero",
+            DualAccum::ProductFourthPowersOddNonZero => "product_fourth_powers_odd_non_zero",
         }
     }
 
@@ -1486,7 +1492,9 @@ impl DualAccum {
                 | DualAccum::ProductSquaresEvenNonZero
                 | DualAccum::ProductSquaresOddNonZero
                 | DualAccum::ProductCubesEvenNonZero
-                | DualAccum::ProductCubesOddNonZero => Some(1),
+                | DualAccum::ProductCubesOddNonZero
+                | DualAccum::ProductFourthPowersEvenNonZero
+                | DualAccum::ProductFourthPowersOddNonZero => Some(1),
                 DualAccum::SumCubes
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
@@ -2977,6 +2985,24 @@ impl DualAccum {
                         s.saturating_mul(s)
                     })
                     .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::ProductFourthPowersEvenNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s)
+                    })
+                    .fold(1i64, i64::saturating_mul),
+            ),
+            DualAccum::ProductFourthPowersOddNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s)
+                    })
+                    .fold(1i64, i64::saturating_mul),
             ),
         }
     }
@@ -5847,6 +5873,34 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+            DualAccum::ProductFourthPowersEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                prod = prod * sq * sq;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
+            DualAccum::ProductFourthPowersOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                prod = prod * sq * sq;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7006,6 +7060,8 @@ fn try_dual_and_pairwise(
         DualAccum::ProductCubesOddNonZero,
         DualAccum::SumFourthPowersEvenNonZero,
         DualAccum::SumFourthPowersOddNonZero,
+        DualAccum::ProductFourthPowersEvenNonZero,
+        DualAccum::ProductFourthPowersOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -9549,6 +9605,8 @@ enum KClosed {
     CountNonZeroDivisibleByK,
     /// Sum of non-zero elements divisible by k (none → 0; k == 0 → None).
     SumNonZeroDivisibleByK,
+    /// Product of non-zero elements divisible by k (none → 1; k == 0 → None).
+    ProductNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -9672,6 +9730,7 @@ impl KClosed {
             KClosed::MeanAbsDivisibleByKTrunc => "mean_abs_divisible_by_k_trunc",
             KClosed::CountNonZeroDivisibleByK => "count_non_zero_divisible_by_k",
             KClosed::SumNonZeroDivisibleByK => "sum_non_zero_divisible_by_k",
+            KClosed::ProductNonZeroDivisibleByK => "product_non_zero_divisible_by_k",
         }
     }
 
@@ -10627,6 +10686,16 @@ impl KClosed {
                     arr.iter()
                         .filter(|&&v| v != 0 && v % k == 0)
                         .fold(0i64, |a, &b| a.saturating_add(b)),
+                )
+            }
+            KClosed::ProductNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                Some(
+                    arr.iter()
+                        .filter(|&&v| v != 0 && v % k == 0)
+                        .fold(1i64, |a, &b| a.saturating_mul(b)),
                 )
             }
         }
@@ -12333,6 +12402,19 @@ KClosed::MinWhereAbsNeK => format!(
     return total;\n\
 }}\n"
             ),
+            KClosed::ProductNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                prod = prod * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
 
         }
     }
@@ -12464,6 +12546,7 @@ fn try_k_closed(
         KClosed::MeanAbsDivisibleByKTrunc,
         KClosed::CountNonZeroDivisibleByK,
         KClosed::SumNonZeroDivisibleByK,
+        KClosed::ProductNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -13858,5 +13941,9 @@ mod tests {
         assert_eq!(DualAccum::SumFourthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(82));
         assert_eq!(DualAccum::SumFourthPowersEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::SumNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(10));
+        assert_eq!(DualAccum::ProductFourthPowersEvenNonZero.eval(&[0, -2, 2, 3]), Some(256));
+        assert_eq!(DualAccum::ProductFourthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(81));
+        assert_eq!(DualAccum::ProductFourthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
+        assert_eq!(KClosed::ProductNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(24));
     }
 }
