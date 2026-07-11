@@ -1161,6 +1161,10 @@ enum DualAccum {
     ProductEighthPowersEvenNonZero,
     /// Product of eighth powers of odd-valued non-zero elements (none → 1).
     ProductEighthPowersOddNonZero,
+    /// Truncating mean of eighth powers of even-valued non-zero elements (none → 0).
+    MeanEighthPowersEvenNonZeroTrunc,
+    /// Truncating mean of eighth powers of odd-valued non-zero elements (none → 0).
+    MeanEighthPowersOddNonZeroTrunc,
 }
 
 impl DualAccum {
@@ -1394,6 +1398,8 @@ impl DualAccum {
             DualAccum::SumEighthPowersOddNonZero => "sum_eighth_powers_odd_non_zero",
             DualAccum::ProductEighthPowersEvenNonZero => "product_eighth_powers_even_non_zero",
             DualAccum::ProductEighthPowersOddNonZero => "product_eighth_powers_odd_non_zero",
+            DualAccum::MeanEighthPowersEvenNonZeroTrunc => "mean_eighth_powers_even_non_zero_trunc",
+            DualAccum::MeanEighthPowersOddNonZeroTrunc => "mean_eighth_powers_odd_non_zero_trunc",
         }
     }
 
@@ -1493,6 +1499,8 @@ impl DualAccum {
                 | DualAccum::MeanSeventhPowersOddNonZeroTrunc
                 | DualAccum::SumEighthPowersEvenNonZero
                 | DualAccum::SumEighthPowersOddNonZero
+                | DualAccum::MeanEighthPowersEvenNonZeroTrunc
+                | DualAccum::MeanEighthPowersOddNonZeroTrunc
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -3376,6 +3384,40 @@ impl DualAccum {
                     })
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanEighthPowersEvenNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 == 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
+            DualAccum::MeanEighthPowersOddNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 != 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
         }
     }
 
@@ -6653,6 +6695,46 @@ DualAccum::SumSquaresOdds => format!(
     return prod;\n\
 }}\n"
             ),
+            DualAccum::MeanEighthPowersEvenNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                q: i64 = sq * sq;\n\
+                total = total + q * q;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
+            DualAccum::MeanEighthPowersOddNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                q: i64 = sq * sq;\n\
+                total = total + q * q;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7838,6 +7920,8 @@ fn try_dual_and_pairwise(
         DualAccum::SumEighthPowersOddNonZero,
         DualAccum::ProductEighthPowersEvenNonZero,
         DualAccum::ProductEighthPowersOddNonZero,
+        DualAccum::MeanEighthPowersEvenNonZeroTrunc,
+        DualAccum::MeanEighthPowersOddNonZeroTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -10407,6 +10491,8 @@ enum KClosed {
     XorNonZeroDivisibleByK,
     /// Bitwise OR of non-zero elements divisible by k (none → 0; k == 0 → None).
     OrNonZeroDivisibleByK,
+    /// Bitwise AND of non-zero elements divisible by k (none → -1; k == 0 → None).
+    AndNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -10543,6 +10629,7 @@ impl KClosed {
             KClosed::MeanAbsNonZeroDivisibleByKTrunc => "mean_abs_non_zero_divisible_by_k_trunc",
             KClosed::XorNonZeroDivisibleByK => "xor_non_zero_divisible_by_k",
             KClosed::OrNonZeroDivisibleByK => "or_non_zero_divisible_by_k",
+            KClosed::AndNonZeroDivisibleByK => "and_non_zero_divisible_by_k",
         }
     }
 
@@ -11654,6 +11741,24 @@ impl KClosed {
                         .filter(|&&v| v != 0 && v % k == 0)
                         .fold(0i64, |a, &b| a | b),
                 )
+            }
+            KClosed::AndNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut found = false;
+                let mut acc = -1i64;
+                for &v in arr {
+                    if v != 0 && v % k == 0 {
+                        if !found {
+                            acc = v;
+                            found = true;
+                        } else {
+                            acc &= v;
+                        }
+                    }
+                }
+                Some(if found { acc } else { -1 })
             }
         }
     }
@@ -13577,6 +13682,25 @@ KClosed::MinWhereAbsNeK => format!(
     return x;\n\
 }}\n"
             ),
+            KClosed::AndNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    x: i64 = 0 - 1;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                if found == 0 {{\n\
+                    x = item;\n\
+                    found = 1;\n\
+                }} else {{\n\
+                    x = x & item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return x;\n\
+}}\n"
+            ),
 
         }
     }
@@ -13721,6 +13845,7 @@ fn try_k_closed(
         KClosed::MeanAbsNonZeroDivisibleByKTrunc,
         KClosed::XorNonZeroDivisibleByK,
         KClosed::OrNonZeroDivisibleByK,
+        KClosed::AndNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -15167,5 +15292,9 @@ mod tests {
         assert_eq!(DualAccum::ProductEighthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(6561));
         assert_eq!(DualAccum::ProductEighthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
         assert_eq!(KClosed::OrNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(6));
+        assert_eq!(DualAccum::MeanEighthPowersEvenNonZeroTrunc.eval(&[0, -2, 2, 3]), Some(256));
+        assert_eq!(DualAccum::MeanEighthPowersOddNonZeroTrunc.eval(&[0, -3, 1, 2]), Some(3281));
+        assert_eq!(DualAccum::MeanEighthPowersEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::AndNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(4));
     }
 }
