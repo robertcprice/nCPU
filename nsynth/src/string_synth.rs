@@ -744,6 +744,8 @@ enum WordShape {
     FilterLenLt4,
     /// Keep words with length == 5.
     FilterLenEq5,
+    /// Keep words with length > 5.
+    FilterLenGt5,
     /// Dedup all words preserving first-occurrence order.
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
@@ -818,6 +820,7 @@ impl WordShape {
             WordShape::FilterLenGt4 => "filter_len_gt4",
             WordShape::FilterLenLt4 => "filter_len_lt4",
             WordShape::FilterLenEq5 => "filter_len_eq5",
+            WordShape::FilterLenGt5 => "filter_len_gt5",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
             WordShape::SortByLenDesc => "sort_by_len_desc",
@@ -1025,6 +1028,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenEq5 => words
             .into_iter()
             .filter(|w| w.chars().count() == 5)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenGt5 => words
+            .into_iter()
+            .filter(|w| w.chars().count() > 5)
             .collect::<Vec<_>>()
             .join(sep),
         WordShape::DedupAll => {
@@ -1248,6 +1256,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
                 WordShape::FilterLenEq5 => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 5 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::FilterLenGt5 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 5 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
 WordShape::DedupAll => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1329,7 +1340,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 50] = [
+    const SHAPES: [WordShape; 51] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1361,6 +1372,7 @@ pub fn synthesize_word_program(
         WordShape::FilterLenGt4,
         WordShape::FilterLenLt4,
         WordShape::FilterLenEq5,
+        WordShape::FilterLenGt5,
         WordShape::DedupAll,
         WordShape::SortByLen,
         WordShape::SortByLenDesc,
@@ -2550,6 +2562,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-question_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Exclamation count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '!').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"!\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-exclamation_count".to_string(),
                 error: None,
             });
         }
