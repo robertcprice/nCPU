@@ -235,6 +235,15 @@ fn dual_mean_trunc(arr: &[i64]) -> Option<i64> {
     Some(arr.iter().sum::<i64>() / (arr.len() as i64))
 }
 
+fn dual_sum_squares(arr: &[i64]) -> i64 {
+    arr.iter().map(|&x| x.saturating_mul(x)).fold(0i64, i64::saturating_add)
+}
+
+fn k_kth_from_end(arr: &[i64], k: i64) -> Option<i64> {
+    if k < 1 || k as usize > arr.len() { return None; }
+    Some(arr[arr.len() - (k as usize)])
+}
+
 fn dual_second_min(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut first = arr[0];
@@ -539,6 +548,8 @@ mod tests {
         assert_eq!(dual_lcm_all(&[2, 3, 4]), Some(12));
         assert_eq!(dual_mean_trunc(&[1, 2, 3]), Some(2));
         assert_eq!(dual_mean_trunc(&[10, 20, 30, 40]), Some(25));
+        assert_eq!(dual_sum_squares(&[1, 2, 3]), 14);
+        assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -613,6 +624,14 @@ fn drop_first(s: &str, sep: &str) -> String {
     words[1..].join(sep)
 }
 
+fn first_word(s: &str, sep: &str) -> String {
+    s.split(sep).next().unwrap_or("").to_string()
+}
+
+fn last_word(s: &str, sep: &str) -> String {
+    s.split(sep).last().unwrap_or("").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +647,8 @@ mod tests {
         assert_eq!(dedup_adjacent("hi hi there there hi", " "), "hi there hi");
         assert_eq!(swap_first_last("one two three", " "), "three two one");
         assert_eq!(drop_first("keep the rest", " "), "the rest");
+        assert_eq!(first_word("alpha beta gamma", " "), "alpha");
+        assert_eq!(last_word("alpha beta gamma", " "), "gamma");
     }
 }
 EOF

@@ -729,6 +729,8 @@ enum DualAccum {
     LcmAll,
     /// Truncating mean: `sum / len` (empty → None).
     MeanTrunc,
+    /// Sum of squares.
+    SumSquares,
 }
 
 impl DualAccum {
@@ -746,6 +748,7 @@ impl DualAccum {
             DualAccum::GcdAll => "gcd_all",
             DualAccum::LcmAll => "lcm_all",
             DualAccum::MeanTrunc => "mean_trunc",
+            DualAccum::SumSquares => "sum_squares",
         }
     }
 
@@ -886,6 +889,12 @@ impl DualAccum {
                 let sum = arr.iter().copied().fold(0i64, i64::saturating_add);
                 Some(sum / (arr.len() as i64))
             }
+            DualAccum::SumSquares => Some(
+                arr.iter()
+                    .copied()
+                    .map(|x| x.saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -1060,6 +1069,15 @@ impl DualAccum {
         total = total + item;\n\
     }}\n\
     return total / arr.len;\n\
+}}\n"
+            ),
+            DualAccum::SumSquares => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        total = total + item * item;\n\
+    }}\n\
+    return total;\n\
 }}\n"
             ),
         }
@@ -1459,6 +1477,7 @@ fn try_dual_and_pairwise(
         DualAccum::GcdAll,
         DualAccum::LcmAll,
         DualAccum::MeanTrunc,
+        DualAccum::SumSquares,
     ] {
         let ok = inputs
             .iter()
@@ -1888,6 +1907,8 @@ enum KClosed {
     FirstIndexOf,
     /// Last index where `arr[i] == k`, else -1.
     LastIndexOf,
+    /// 1-indexed from end: `arr[len - k]`.
+    KthFromEnd,
 }
 
 impl KClosed {
@@ -1897,6 +1918,7 @@ impl KClosed {
             KClosed::KthLargest => "kth_largest",
             KClosed::FirstIndexOf => "first_index_of",
             KClosed::LastIndexOf => "last_index_of",
+            KClosed::KthFromEnd => "kth_from_end",
         }
     }
 
@@ -1933,6 +1955,12 @@ impl KClosed {
                     }
                 }
                 Some(-1)
+            }
+            KClosed::KthFromEnd => {
+                if k < 1 || k as usize > arr.len() {
+                    return None;
+                }
+                Some(arr[arr.len() - (k as usize)])
             }
         }
     }
@@ -1975,6 +2003,11 @@ impl KClosed {
     return 0 - 1;\n\
 }}\n"
             ),
+            KClosed::KthFromEnd => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    return arr[arr.len - k];\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1991,6 +2024,7 @@ fn try_k_closed(
         KClosed::KthLargest,
         KClosed::FirstIndexOf,
         KClosed::LastIndexOf,
+        KClosed::KthFromEnd,
     ] {
         let ok = inputs
             .iter()
@@ -2924,6 +2958,8 @@ mod tests {
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 5, 5], 5), Some(1));
         assert_eq!(KClosed::LastIndexOf.eval(&[1, 5, 5], 5), Some(2));
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 2], 9), Some(-1));
+        assert_eq!(KClosed::KthFromEnd.eval(&[10, 20, 30, 40], 1), Some(40));
+        assert_eq!(KClosed::KthFromEnd.eval(&[10, 20, 30, 40], 2), Some(30));
         assert_eq!(DualAccum::Median.eval(&[1, 100, 2]), Some(2));
         assert_eq!(DualAccum::Median.eval(&[10, 1, 5, 0]), Some(5));
         assert_eq!(DualAccum::GcdAll.eval(&[12, 18, 30]), Some(6));
@@ -2932,5 +2968,7 @@ mod tests {
         assert_eq!(DualAccum::LcmAll.eval(&[6, 9]), Some(18));
         assert_eq!(DualAccum::MeanTrunc.eval(&[1, 2, 3]), Some(2));
         assert_eq!(DualAccum::MeanTrunc.eval(&[10, 20, 30, 40]), Some(25));
+        assert_eq!(DualAccum::SumSquares.eval(&[1, 2, 3]), Some(14));
+        assert_eq!(DualAccum::SumSquares.eval(&[-2, 3]), Some(13));
     }
 }
