@@ -1089,6 +1089,10 @@ enum DualAccum {
     MinAbsEvenNonZero,
     /// Min abs among odd-valued non-zero elements (none → 0).
     MinAbsOddNonZero,
+    /// Sum of squares of even-valued non-zero elements.
+    SumSquaresEvenNonZero,
+    /// Sum of squares of odd-valued non-zero elements.
+    SumSquaresOddNonZero,
 }
 
 impl DualAccum {
@@ -1286,6 +1290,8 @@ impl DualAccum {
             DualAccum::MaxAbsOddNonZero => "max_abs_odd_non_zero",
             DualAccum::MinAbsEvenNonZero => "min_abs_even_non_zero",
             DualAccum::MinAbsOddNonZero => "min_abs_odd_non_zero",
+            DualAccum::SumSquaresEvenNonZero => "sum_squares_even_non_zero",
+            DualAccum::SumSquaresOddNonZero => "sum_squares_odd_non_zero",
         }
     }
 
@@ -1363,6 +1369,8 @@ impl DualAccum {
                 | DualAccum::MaxAbsOddNonZero
                 | DualAccum::MinAbsEvenNonZero
                 | DualAccum::MinAbsOddNonZero
+                | DualAccum::SumSquaresEvenNonZero
+                | DualAccum::SumSquaresOddNonZero
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -2872,6 +2880,18 @@ impl DualAccum {
                 }
                 Some(best.unwrap_or(0))
             }
+            DualAccum::SumSquaresEvenNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0 && x != 0)
+                    .map(|&x| x.saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumSquaresOddNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0 && x != 0)
+                    .map(|&x| x.saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -5606,6 +5626,33 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
+            DualAccum::SumSquaresEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                total = total + item * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumSquaresOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                total = total + item * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -6754,6 +6801,8 @@ fn try_dual_and_pairwise(
         DualAccum::MaxAbsOddNonZero,
         DualAccum::MinAbsEvenNonZero,
         DualAccum::MinAbsOddNonZero,
+        DualAccum::SumSquaresEvenNonZero,
+        DualAccum::SumSquaresOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -9287,6 +9336,8 @@ enum KClosed {
     MaxAbsDivisibleByK,
     /// Min |v| among elements divisible by k (none → 0; k == 0 → None).
     MinAbsDivisibleByK,
+    /// GCD of |v| for elements divisible by k (none → 0; k == 0 → None).
+    GcdAbsDivisibleByK,
 }
 
 impl KClosed {
@@ -9405,6 +9456,7 @@ impl KClosed {
             KClosed::AbsProductDivisibleByK => "abs_product_divisible_by_k",
             KClosed::MaxAbsDivisibleByK => "max_abs_divisible_by_k",
             KClosed::MinAbsDivisibleByK => "min_abs_divisible_by_k",
+            KClosed::GcdAbsDivisibleByK => "gcd_abs_divisible_by_k",
         }
     }
 
@@ -10297,6 +10349,22 @@ impl KClosed {
                     }
                 }
                 Some(best.unwrap_or(0))
+            }
+            KClosed::GcdAbsDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut g: Option<i64> = None;
+                for &v in arr {
+                    if v % k == 0 {
+                        let a = v.abs();
+                        if a == 0 {
+                            continue;
+                        }
+                        g = Some(g.map_or(a, |g| i64_gcd(g, a)));
+                    }
+                }
+                Some(g.unwrap_or(0))
             }
         }
     }
@@ -11902,6 +11970,32 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::GcdAbsDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    g: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % k == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            if a != 0 {{\n\
+                if found == 0 {{\n\
+                    g = a;\n\
+                    found = 1;\n\
+                }} else {{\n\
+                    while a != 0 {{\n\
+                        t: i64 = a;\n\
+                        a = g % a;\n\
+                        g = t;\n\
+                    }}\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return g;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -12027,6 +12121,7 @@ fn try_k_closed(
         KClosed::AbsProductDivisibleByK,
         KClosed::MaxAbsDivisibleByK,
         KClosed::MinAbsDivisibleByK,
+        KClosed::GcdAbsDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -13401,5 +13496,9 @@ mod tests {
         assert_eq!(DualAccum::MinAbsOddNonZero.eval(&[0, -7, 5, 2]), Some(5));
         assert_eq!(DualAccum::MinAbsEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::MinAbsDivisibleByK.eval(&[-8, 3, 4], 2), Some(4));
+        assert_eq!(DualAccum::SumSquaresEvenNonZero.eval(&[0, -4, 2, 3]), Some(20));
+        assert_eq!(DualAccum::SumSquaresOddNonZero.eval(&[0, -3, 5, 2]), Some(34));
+        assert_eq!(DualAccum::SumSquaresEvenNonZero.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::GcdAbsDivisibleByK.eval(&[12, 18, 5], 2), Some(6));
     }
 }
