@@ -813,6 +813,8 @@ enum DualAccum {
     AllNonPositive,
     /// Weighted index sum `Σ i * arr[i]` (0-based).
     DotIndex,
+    /// Sum of squared diffs from truncating mean (SSE).
+    SumSqDiffMean,
 }
 
 impl DualAccum {
@@ -872,6 +874,7 @@ impl DualAccum {
             DualAccum::ProductOdds => "product_odds",
             DualAccum::AllNonPositive => "all_non_positive",
             DualAccum::DotIndex => "dot_index",
+            DualAccum::SumSqDiffMean => "sum_sq_diff_mean",
         }
     }
 
@@ -920,7 +923,8 @@ impl DualAccum {
                 DualAccum::MeanAbsTrunc
                 | DualAccum::MeanTrunc
                 | DualAccum::CountGtMean
-                | DualAccum::CountLtMean => None,
+                | DualAccum::CountLtMean
+                | DualAccum::SumSqDiffMean => None,
                 _ => None,
             };
         }
@@ -1316,6 +1320,18 @@ impl DualAccum {
                     .map(|(i, &v)| (i as i64).saturating_mul(v))
                     .fold(0i64, i64::saturating_add),
             ),
+            DualAccum::SumSqDiffMean => {
+                let sum = arr.iter().copied().fold(0i64, i64::saturating_add);
+                let mean = sum / (arr.len() as i64);
+                Some(
+                    arr.iter()
+                        .map(|&x| {
+                            let d = x.saturating_sub(mean);
+                            d.saturating_mul(d)
+                        })
+                        .fold(0i64, i64::saturating_add),
+                )
+            }
         }
     }
 
@@ -1953,6 +1969,21 @@ impl DualAccum {
     while i < arr.len {{\n\
         total = total + i * arr[i];\n\
         i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumSqDiffMean => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    sum: i64 = 0;\n\
+    for item in arr {{\n\
+        sum = sum + item;\n\
+    }}\n\
+    mean: i64 = sum / arr.len;\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        d: i64 = item - mean;\n\
+        total = total + d * d;\n\
     }}\n\
     return total;\n\
 }}\n"
@@ -2766,6 +2797,7 @@ fn try_dual_and_pairwise(
         DualAccum::ProductOdds,
         DualAccum::AllNonPositive,
         DualAccum::DotIndex,
+        DualAccum::SumSqDiffMean,
     ] {
         let ok = inputs
             .iter()
@@ -2853,6 +2885,8 @@ fn try_dual_and_pairwise(
         IndexScan::ArgMinAbs,
         IndexScan::SumAbsEvenIndices,
         IndexScan::SumAbsOddIndices,
+        IndexScan::CountEvenIndices,
+        IndexScan::CountOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -2922,6 +2956,10 @@ enum IndexScan {
     SumAbsEvenIndices,
     /// Sum of absolute values at odd indices.
     SumAbsOddIndices,
+    /// Count of even indices (= ceil(len/2)).
+    CountEvenIndices,
+    /// Count of odd indices (= floor(len/2)).
+    CountOddIndices,
 }
 
 impl IndexScan {
@@ -2950,6 +2988,8 @@ impl IndexScan {
             IndexScan::ArgMinAbs => "argmin_abs",
             IndexScan::SumAbsEvenIndices => "sum_abs_even_indices",
             IndexScan::SumAbsOddIndices => "sum_abs_odd_indices",
+            IndexScan::CountEvenIndices => "count_even_indices",
+            IndexScan::CountOddIndices => "count_odd_indices",
         }
     }
 
@@ -3190,6 +3230,8 @@ impl IndexScan {
                     .map(|(_, &v)| v.abs())
                     .fold(0i64, i64::saturating_add),
             ),
+            IndexScan::CountEvenIndices => Some(((arr.len() + 1) / 2) as i64),
+            IndexScan::CountOddIndices => Some((arr.len() / 2) as i64),
         }
     }
 
@@ -3468,6 +3510,16 @@ impl IndexScan {
         i = i + 2;\n\
     }}\n\
     return total;\n\
+}}\n"
+            ),
+            IndexScan::CountEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return (arr.len + 1) / 2;\n\
+}}\n"
+            ),
+            IndexScan::CountOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr.len / 2;\n\
 }}\n"
             ),
         }
@@ -4912,5 +4964,8 @@ mod tests {
         assert_eq!(DualAccum::DotIndex.eval(&[10, 20, 30]), Some(80));
         assert_eq!(PairwiseScan::MeanAbsDiffTrunc.eval(&[1, 4, 2]), Some(2));
         assert_eq!(KClosed::MaxGtK.eval(&[1, 5, 3, 2], 2), Some(5));
+        assert_eq!(DualAccum::SumSqDiffMean.eval(&[1, 2, 3]), Some(2));
+        assert_eq!(IndexScan::CountEvenIndices.eval(&[1, 2, 3, 4, 5]), Some(3));
+        assert_eq!(IndexScan::CountOddIndices.eval(&[1, 2, 3, 4, 5]), Some(2));
     }
 }

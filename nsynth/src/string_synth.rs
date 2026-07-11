@@ -738,6 +738,10 @@ enum WordShape {
     TakeLastTwo,
     /// Drop the last two words, rejoin.
     DropLastTwo,
+    /// Capitalize only the last word (first char upper).
+    CapLastWord,
+    /// Reverse characters of the first word only.
+    ReverseFirstWord,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -775,6 +779,8 @@ impl WordShape {
             WordShape::DropFirstTwo => "drop_first_two",
             WordShape::TakeLastTwo => "take_last_two",
             WordShape::DropLastTwo => "drop_last_two",
+            WordShape::CapLastWord => "cap_last_word",
+            WordShape::ReverseFirstWord => "reverse_first_word",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -964,6 +970,25 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[..words.len() - 2].join(sep)
             }
         }
+        WordShape::CapLastWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                let last = out.len() - 1;
+                out[last] = cap_first(&out[last]);
+                out.join(sep)
+            }
+        }
+        WordShape::ReverseFirstWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                out[0] = out[0].chars().rev().collect();
+                out.join(sep)
+            }
+        }
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1067,6 +1092,12 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::DropLastTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 2 {{\n        end = end - 2;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::CapLastWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    w: string = words[words.len - 1];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::ReverseFirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    out.push(words[0].reverse());\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1097,7 +1128,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 30] = [
+    const SHAPES: [WordShape; 32] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1126,6 +1157,8 @@ pub fn synthesize_word_program(
         WordShape::DropFirstTwo,
         WordShape::TakeLastTwo,
         WordShape::DropLastTwo,
+        WordShape::CapLastWord,
+        WordShape::ReverseFirstWord,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];

@@ -432,6 +432,12 @@ fn dual_dot_index(arr: &[i64]) -> i64 {
     arr.iter().enumerate().map(|(i,&v)| (i as i64)*v).sum()
 }
 
+fn dual_sum_sq_diff_mean(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mean = arr.iter().sum::<i64>() / (arr.len() as i64);
+    Some(arr.iter().map(|&x| { let d = x - mean; d*d }).sum())
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -822,6 +828,14 @@ fn index_sum_abs_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,_)| i%2==1).map(|(_,&v)| v.abs()).sum()
 }
 
+fn index_count_even_indices(arr: &[i64]) -> i64 {
+    ((arr.len() + 1) / 2) as i64
+}
+
+fn index_count_odd_indices(arr: &[i64]) -> i64 {
+    (arr.len() / 2) as i64
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1046,6 +1060,7 @@ mod tests {
         assert_eq!(dual_product_odds(&[1, 2, 3, 4]), 3);
         assert_eq!(dual_all_non_positive(&[-1, 0, -2]), 1);
         assert_eq!(dual_dot_index(&[10, 20, 30]), 80);
+        assert_eq!(dual_sum_sq_diff_mean(&[1, 2, 3]), Some(2));
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1059,6 +1074,8 @@ mod tests {
         assert_eq!(index_argmin_abs(&[5, -1, 3]), Some(1));
         assert_eq!(index_sum_abs_even(&[-1, 2, -3, 4]), 4);
         assert_eq!(index_sum_abs_odd(&[-1, 2, -3, 4]), 6);
+        assert_eq!(index_count_even_indices(&[1, 2, 3, 4, 5]), 3);
+        assert_eq!(index_count_odd_indices(&[1, 2, 3, 4, 5]), 2);
         assert_eq!(k_count_eq(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
         assert_eq!(k_count_gt(&[1, 5, 3, 2], 2), 2);
@@ -1257,6 +1274,31 @@ fn alpha_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_alphabetic()).count() as i64
 }
 
+fn cap_first(w: &str) -> String {
+    let mut c = w.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+fn cap_last_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { return String::new(); }
+    let mut out: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let last = out.len() - 1;
+    out[last] = cap_first(&out[last]);
+    out.join(sep)
+}
+
+fn reverse_first_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { return String::new(); }
+    let mut out: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    out[0] = out[0].chars().rev().collect();
+    out.join(sep)
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1301,6 +1343,8 @@ mod tests {
         assert_eq!(sum_word_lens("a to moon", " "), 7);
         assert_eq!(space_count("a b c"), 2);
         assert_eq!(alpha_count("Hi 2!"), 2);
+        assert_eq!(cap_last_word("hello world", " "), "hello World");
+        assert_eq!(reverse_first_word("abc def", " "), "cba def");
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
