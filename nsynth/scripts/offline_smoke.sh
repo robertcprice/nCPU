@@ -1389,8 +1389,21 @@ fn reverse_first_word(s: &str, sep: &str) -> String {
     out.join(sep)
 }
 
+fn cap_first_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { return String::new(); }
+    let mut out: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    out[0] = cap_first(&out[0]);
+    out.join(sep)
+}
+
 fn digit_sum(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_digit()).map(|c| (c as u8 - b'0') as i64).sum()
+}
+
+fn digit_product(s: &str) -> i64 {
+    let digits: Vec<i64> = s.chars().filter(|c| c.is_ascii_digit()).map(|c| (c as u8 - b'0') as i64).collect();
+    if digits.is_empty() { 1 } else { digits.iter().product() }
 }
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
@@ -1423,6 +1436,7 @@ mod tests {
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
         assert_eq!(filter_len_eq3("cat dog hi me", " "), "cat dog");
         assert_eq!(filter_len_lt3("cat dog hi me", " "), "hi me");
+        assert_eq!(filter_len_eq4("a to the moon", " "), "moon");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
@@ -1439,7 +1453,9 @@ mod tests {
         assert_eq!(alpha_count("Hi 2!"), 2);
         assert_eq!(cap_last_word("hello world", " "), "hello World");
         assert_eq!(reverse_first_word("abc def", " "), "cba def");
+        assert_eq!(cap_first_word("hello world", " "), "Hello world");
         assert_eq!(digit_sum("a12b3"), 6);
+        assert_eq!(digit_product("a23b"), 6);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
