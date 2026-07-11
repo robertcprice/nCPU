@@ -3610,6 +3610,8 @@ fn try_dual_and_pairwise(
         IndexScan::CountOddValueOddIndices,
         IndexScan::SumEvenValueEvenIndices,
         IndexScan::SumEvenValueOddIndices,
+        IndexScan::SumOddValueEvenIndices,
+        IndexScan::SumOddValueOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -3771,6 +3773,10 @@ enum IndexScan {
     SumEvenValueEvenIndices,
     /// Sum of even-valued elements at odd indices.
     SumEvenValueOddIndices,
+    /// Sum of odd-valued elements at even indices.
+    SumOddValueEvenIndices,
+    /// Sum of odd-valued elements at odd indices.
+    SumOddValueOddIndices,
 }
 
 impl IndexScan {
@@ -3845,6 +3851,8 @@ impl IndexScan {
             IndexScan::CountOddValueOddIndices => "count_odd_value_odd_indices",
             IndexScan::SumEvenValueEvenIndices => "sum_even_value_even_indices",
             IndexScan::SumEvenValueOddIndices => "sum_even_value_odd_indices",
+            IndexScan::SumOddValueEvenIndices => "sum_odd_value_even_indices",
+            IndexScan::SumOddValueOddIndices => "sum_odd_value_odd_indices",
         }
     }
 
@@ -4456,6 +4464,20 @@ impl IndexScan {
                 arr.iter()
                     .enumerate()
                     .filter(|(i, &v)| i % 2 == 1 && v % 2 == 0)
+                    .map(|(_, &v)| v)
+                    .fold(0i64, i64::saturating_add),
+            ),
+            IndexScan::SumOddValueEvenIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, &v)| i % 2 == 0 && v % 2 != 0)
+                    .map(|(_, &v)| v)
+                    .fold(0i64, i64::saturating_add),
+            ),
+            IndexScan::SumOddValueOddIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, &v)| i % 2 == 1 && v % 2 != 0)
                     .map(|(_, &v)| v)
                     .fold(0i64, i64::saturating_add),
             ),
@@ -5363,6 +5385,32 @@ impl IndexScan {
     return total;\n\
 }}\n"
             ),
+            IndexScan::SumOddValueEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        if arr[i] % 2 != 0 {{\n\
+            total = total + arr[i];\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::SumOddValueOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] % 2 != 0 {{\n\
+            total = total + arr[i];\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
 
         }
     }
@@ -5473,6 +5521,8 @@ enum KClosed {
     MinAbsGtK,
     /// Max |v| among elements with |v| > k (none → 0).
     MaxAbsGtK,
+    /// Min |v| among elements with |v| < k (none → 0).
+    MinAbsLtK,
 }
 
 impl KClosed {
@@ -5529,6 +5579,7 @@ impl KClosed {
             KClosed::MaxAbsLtK => "max_abs_lt_k",
             KClosed::MinAbsGtK => "min_abs_gt_k",
             KClosed::MaxAbsGtK => "max_abs_gt_k",
+            KClosed::MinAbsLtK => "min_abs_lt_k",
         }
     }
 
@@ -5869,6 +5920,20 @@ impl KClosed {
                     let a = v.abs();
                     if a > k {
                         if !found || a > best {
+                            best = a;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            KClosed::MinAbsLtK => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &v in arr {
+                    let a = v.abs();
+                    if a < k {
+                        if !found || a < best {
                             best = a;
                             found = true;
                         }
@@ -6536,6 +6601,25 @@ KClosed::FirstAbsGeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::MinAbsLtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a < k {{\n\
+            if found == 0 {{\n\
+                best = a;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if a < best {{ best = a; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -6599,6 +6683,7 @@ fn try_k_closed(
         KClosed::MaxAbsLtK,
         KClosed::MinAbsGtK,
         KClosed::MaxAbsGtK,
+        KClosed::MinAbsLtK,
     ] {
         let ok = inputs
             .iter()
@@ -7752,5 +7837,8 @@ mod tests {
         assert_eq!(IndexScan::SumEvenValueEvenIndices.eval(&[2, 9, 4, 8]), Some(6));
         assert_eq!(IndexScan::SumEvenValueOddIndices.eval(&[2, 9, 4, 8]), Some(8));
         assert_eq!(KClosed::MaxAbsGtK.eval(&[-5, 2, 4], 2), Some(5));
+        assert_eq!(IndexScan::SumOddValueEvenIndices.eval(&[2, 9, 3, 8]), Some(3));
+        assert_eq!(IndexScan::SumOddValueOddIndices.eval(&[2, 9, 3, 8]), Some(9));
+        assert_eq!(KClosed::MinAbsLtK.eval(&[-5, 2, 4], 4), Some(2));
     }
 }
