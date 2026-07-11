@@ -869,6 +869,10 @@ enum DualAccum {
     AndAbsAll,
     /// Bitwise OR of absolute values (empty → 0).
     OrAbsAll,
+    /// XOR of |x| for even-valued elements (none → 0).
+    XorAbsEvens,
+    /// XOR of |x| for odd-valued elements (none → 0).
+    XorAbsOdds,
 }
 
 impl DualAccum {
@@ -956,6 +960,8 @@ impl DualAccum {
             DualAccum::XorAbsAll => "xor_abs_all",
             DualAccum::AndAbsAll => "and_abs_all",
             DualAccum::OrAbsAll => "or_abs_all",
+            DualAccum::XorAbsEvens => "xor_abs_evens",
+            DualAccum::XorAbsOdds => "xor_abs_odds",
         }
     }
 
@@ -996,6 +1002,8 @@ impl DualAccum {
                 | DualAccum::SumAbsOdds
                 | DualAccum::XorAbsAll
                 | DualAccum::OrAbsAll
+                | DualAccum::XorAbsEvens
+                | DualAccum::XorAbsOdds
                 | DualAccum::SumSquares
                 | DualAccum::AbsSum
                 | DualAccum::MaxAbs
@@ -1594,6 +1602,18 @@ impl DualAccum {
             ),
             DualAccum::OrAbsAll => Some(
                 arr.iter().map(|&x| x.abs()).fold(0i64, |a, b| a | b),
+            ),
+            DualAccum::XorAbsEvens => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0)
+                    .map(|&x| x.abs())
+                    .fold(0i64, |a, b| a ^ b),
+            ),
+            DualAccum::XorAbsOdds => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0)
+                    .map(|&x| x.abs())
+                    .fold(0i64, |a, b| a ^ b),
             ),
         }
     }
@@ -2580,6 +2600,32 @@ DualAccum::MinPositive => format!(
         a: i64 = item;\n\
         if a < 0 {{ a = 0 - a; }}\n\
         total = total | a;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+DualAccum::XorAbsEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total ^ a;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+DualAccum::XorAbsOdds => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total ^ a;\n\
+        }}\n\
     }}\n\
     return total;\n\
 }}\n"
@@ -3622,6 +3668,8 @@ fn try_dual_and_pairwise(
         DualAccum::XorAbsAll,
         DualAccum::AndAbsAll,
         DualAccum::OrAbsAll,
+        DualAccum::XorAbsEvens,
+        DualAccum::XorAbsOdds,
     ] {
         let ok = inputs
             .iter()
@@ -6045,6 +6093,8 @@ enum KClosed {
     MaxWhereAbsEqK,
     /// Min signed value among elements with |v| == k (none → 0).
     MinWhereAbsEqK,
+    /// Sum of elements with |v| != k.
+    SumWhereAbsNeK,
 }
 
 impl KClosed {
@@ -6108,6 +6158,7 @@ impl KClosed {
             KClosed::ProductWhereAbsEqK => "product_where_abs_eq_k",
             KClosed::MaxWhereAbsEqK => "max_where_abs_eq_k",
             KClosed::MinWhereAbsEqK => "min_where_abs_eq_k",
+            KClosed::SumWhereAbsNeK => "sum_where_abs_ne_k",
         }
     }
 
@@ -6523,6 +6574,12 @@ impl KClosed {
                 }
                 Some(best)
             }
+            KClosed::SumWhereAbsNeK => Some(
+                arr.iter()
+                    .filter(|&&v| v.abs() != k)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -7294,6 +7351,19 @@ KClosed::FirstAbsGeK => format!(
     return best;\n\
 }}\n"
             ),
+KClosed::SumWhereAbsNeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a != k {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -7364,6 +7434,7 @@ fn try_k_closed(
         KClosed::ProductWhereAbsEqK,
         KClosed::MaxWhereAbsEqK,
         KClosed::MinWhereAbsEqK,
+        KClosed::SumWhereAbsNeK,
     ] {
         let ok = inputs
             .iter()
@@ -8547,5 +8618,8 @@ mod tests {
         assert_eq!(DualAccum::OrAbsAll.eval(&[-1, 2, 4]), Some(7));
         assert_eq!(IndexScan::XorAbsEvenIndices.eval(&[-1, 2, 4, 8]), Some(5));
         assert_eq!(IndexScan::XorAbsOddIndices.eval(&[-1, 2, 4, 8]), Some(10));
+        assert_eq!(DualAccum::XorAbsEvens.eval(&[-4, 3, 2]), Some(6));
+        assert_eq!(DualAccum::XorAbsOdds.eval(&[-4, 3, 2]), Some(3));
+        assert_eq!(KClosed::SumWhereAbsNeK.eval(&[5, -5, 2], 5), Some(2));
     }
 }
