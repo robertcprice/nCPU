@@ -802,6 +802,8 @@ enum WordShape {
     RotateLeftWords,
     /// Rotate words right by one (last → front).
     RotateRightWords,
+    /// Keep the middle two words when len>=2 (floor((n-2)/2) offset).
+    TakeMiddleTwo,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -871,6 +873,7 @@ impl WordShape {
             WordShape::SwapSecondThird => "swap_second_third",
             WordShape::RotateLeftWords => "rotate_left_words",
             WordShape::RotateRightWords => "rotate_right_words",
+            WordShape::TakeMiddleTwo => "take_middle_two",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1251,6 +1254,14 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 out.join(sep)
             }
         }
+        WordShape::TakeMiddleTwo => {
+            if words.len() < 2 {
+                words.join(sep)
+            } else {
+                let start = (words.len() - 2) / 2;
+                words[start..start + 2].join(sep)
+            }
+        }
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1450,6 +1461,9 @@ WordShape::CapLastWord => format!(
         WordShape::RotateRightWords => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    out.push(words[words.len - 1]);\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::TakeMiddleTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 2 {{\n        return words.join(\"{sep}\");\n    }}\n    start: i64 = (words.len - 2) / 2;\n    out: [string] = [];\n    out.push(words[start]);\n    out.push(words[start + 1]);\n    return out.join(\"{sep}\");\n}}\n"
+        ),
 WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1480,7 +1494,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 62] = [
+    const SHAPES: [WordShape; 63] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1541,6 +1555,7 @@ pub fn synthesize_word_program(
         WordShape::SwapSecondThird,
         WordShape::RotateLeftWords,
         WordShape::RotateRightWords,
+        WordShape::TakeMiddleTwo,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -3049,6 +3064,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-pipe_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Open-brace count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '{').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"{{\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-brace_count".to_string(),
                 error: None,
             });
         }
