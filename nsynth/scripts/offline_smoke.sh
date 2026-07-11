@@ -1091,6 +1091,30 @@ fn index_count_zero_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v == 0).count() as i64
 }
 
+fn index_max_abs_even(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for (i, &v) in arr.iter().enumerate() {
+        if i % 2 == 0 {
+            let a = v.abs();
+            if !found || a > best { best = a; found = true; }
+        }
+    }
+    best
+}
+
+fn index_max_abs_odd(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for (i, &v) in arr.iter().enumerate() {
+        if i % 2 == 1 {
+            let a = v.abs();
+            if !found || a > best { best = a; found = true; }
+        }
+    }
+    best
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1252,6 +1276,13 @@ fn k_last_abs_ge(arr: &[i64], k: i64) -> i64 {
 fn k_first_abs_eq(arr: &[i64], k: i64) -> i64 {
     for (i, &v) in arr.iter().enumerate() {
         if v.abs() == k { return i as i64; }
+    }
+    -1
+}
+
+fn k_last_abs_eq(arr: &[i64], k: i64) -> i64 {
+    for i in (0..arr.len()).rev() {
+        if arr[i].abs() == k { return i as i64; }
     }
     -1
 }
@@ -1479,6 +1510,9 @@ mod tests {
         assert_eq!(k_first_abs_ge(&[1, -5, 2], 4), 1);
         assert_eq!(k_last_abs_ge(&[5, 1, -5, 2], 4), 2);
         assert_eq!(k_first_abs_eq(&[1, -5, 5], 5), 1);
+        assert_eq!(k_last_abs_eq(&[5, 1, -5, 2], 5), 2);
+        assert_eq!(index_max_abs_even(&[-3, 9, 2, 8]), 3);
+        assert_eq!(index_max_abs_odd(&[-3, 9, 2, 8]), 9);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1673,6 +1707,12 @@ fn sort_by_len(s: &str, sep: &str) -> String {
     owned.join(sep)
 }
 
+fn sort_by_len_desc(s: &str, sep: &str) -> String {
+    let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
+    owned.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    owned.join(sep)
+}
+
 fn sort_words_desc(s: &str, sep: &str) -> String {
     let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
     owned.sort();
@@ -1856,6 +1896,10 @@ fn dot_count(s: &str) -> i64 {
 fn comma_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == ',').count() as i64
 }
+fn colon_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == ':').count() as i64
+}
+
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
@@ -1896,6 +1940,7 @@ mod tests {
         assert_eq!(filter_len_lt4("cat dog hi me", " "), "cat dog hi me");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
+        assert_eq!(sort_by_len_desc("aaa b cc", " "), "aaa cc b");
         assert_eq!(sort_words_desc("b aa c", " "), "c b aa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
         assert_eq!(take_first_three("one two three four", " "), "one two three");
@@ -1932,6 +1977,7 @@ mod tests {
         assert_eq!(slash_count("a/b//c"), 3);
         assert_eq!(dot_count("a.b..c"), 3);
         assert_eq!(comma_count("a,b,,c"), 3);
+        assert_eq!(colon_count("a:b::c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

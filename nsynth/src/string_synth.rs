@@ -746,6 +746,8 @@ enum WordShape {
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
     SortByLen,
+    /// Sort words by descending character length.
+    SortByLenDesc,
     /// Keep only the first two words.
     TakeFirstTwo,
     /// Keep only the first three words.
@@ -813,6 +815,7 @@ impl WordShape {
             WordShape::FilterLenLt4 => "filter_len_lt4",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
+            WordShape::SortByLenDesc => "sort_by_len_desc",
             WordShape::TakeFirstTwo => "take_first_two",
             WordShape::TakeFirstThree => "take_first_three",
             WordShape::DropFirstTwo => "drop_first_two",
@@ -1027,6 +1030,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             owned.sort_by_key(|w| w.chars().count());
             owned.join(sep)
         }
+        WordShape::SortByLenDesc => {
+            let mut owned: Vec<String> = words.into_iter().map(|w| w.to_string()).collect();
+            owned.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+            owned.join(sep)
+        }
         WordShape::TakeFirstTwo => {
             let n = words.len().min(2);
             words[..n].join(sep)
@@ -1231,6 +1239,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::SortByLen => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    i: i64 = 0;\n    while i < words.len {{\n        j: i64 = i + 1;\n        while j < words.len {{\n            if words[j].len < words[i].len {{\n                tmp: string = words[i];\n                words[i] = words[j];\n                words[j] = tmp;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return words.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::SortByLenDesc => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    i: i64 = 0;\n    while i < words.len {{\n        j: i64 = i + 1;\n        while j < words.len {{\n            if words[j].len > words[i].len {{\n                tmp: string = words[i];\n                words[i] = words[j];\n                words[j] = tmp;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return words.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::TakeFirstTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if i < 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1300,7 +1311,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 47] = [
+    const SHAPES: [WordShape; 48] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1333,6 +1344,7 @@ pub fn synthesize_word_program(
         WordShape::FilterLenLt4,
         WordShape::DedupAll,
         WordShape::SortByLen,
+        WordShape::SortByLenDesc,
         WordShape::TakeFirstTwo,
         WordShape::TakeFirstThree,
         WordShape::DropFirstTwo,
@@ -2434,6 +2446,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-comma_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Colon count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == ':').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \":\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-colon_count".to_string(),
                 error: None,
             });
         }
