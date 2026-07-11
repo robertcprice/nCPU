@@ -724,6 +724,8 @@ enum WordShape {
     FilterLenGt3,
     /// Keep words with length == 3.
     FilterLenEq3,
+    /// Keep words with length < 3.
+    FilterLenLt3,
     /// Dedup all words preserving first-occurrence order.
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
@@ -766,6 +768,7 @@ impl WordShape {
             WordShape::FilterLenEq2 => "filter_len_eq2",
             WordShape::FilterLenGt3 => "filter_len_gt3",
             WordShape::FilterLenEq3 => "filter_len_eq3",
+            WordShape::FilterLenLt3 => "filter_len_lt3",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
             WordShape::TakeFirstTwo => "take_first_two",
@@ -917,6 +920,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .filter(|w| w.chars().count() == 3)
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::FilterLenLt3 => words
+            .into_iter()
+            .filter(|w| w.chars().count() < 3)
+            .collect::<Vec<_>>()
+            .join(sep),
         WordShape::DedupAll => {
             let mut out: Vec<&str> = Vec::new();
             for w in words {
@@ -1038,6 +1046,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenEq3 => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::FilterLenLt3 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::DedupAll => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1086,7 +1097,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 29] = [
+    const SHAPES: [WordShape; 30] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1108,6 +1119,7 @@ pub fn synthesize_word_program(
         WordShape::FilterLenEq2,
         WordShape::FilterLenGt3,
         WordShape::FilterLenEq3,
+        WordShape::FilterLenLt3,
         WordShape::DedupAll,
         WordShape::SortByLen,
         WordShape::TakeFirstTwo,
@@ -1689,6 +1701,36 @@ pub fn synthesize_string_int_program(
                     error: None,
                 });
             }
+        }
+    }
+    // Alphabetic char count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_alphabetic()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-alpha_count".to_string(),
+                error: None,
+            });
         }
     }
     // Space count.

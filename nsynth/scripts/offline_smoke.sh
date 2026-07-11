@@ -420,6 +420,10 @@ fn dual_product_evens(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x % 2 == 0).copied().fold(1, i64::saturating_mul)
 }
 
+fn dual_product_odds(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x % 2 != 0).copied().fold(1, i64::saturating_mul)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -721,6 +725,19 @@ fn pairwise_min_increase(arr: &[i64]) -> i64 {
     best
 }
 
+fn pairwise_min_decrease(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for i in 1..arr.len() {
+        let fall = arr[i - 1] - arr[i];
+        if fall > 0 && (!found || fall < best) {
+            best = fall;
+            found = true;
+        }
+    }
+    best
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -778,6 +795,14 @@ fn index_argmin_abs(arr: &[i64]) -> Option<i64> {
     Some(best_i as i64)
 }
 
+fn index_sum_abs_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==0).map(|(_,&v)| v.abs()).sum()
+}
+
+fn index_sum_abs_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==1).map(|(_,&v)| v.abs()).sum()
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -824,6 +849,10 @@ fn k_min_gt(arr: &[i64], k: i64) -> Option<i64> {
         }
     }
     best
+}
+
+fn k_sum_ne(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v != k).copied().sum()
 }
 
 #[cfg(test)]
@@ -985,6 +1014,7 @@ mod tests {
         assert_eq!(dual_count_lt_mean(&[1, 2, 3, 10]), Some(3));
         assert_eq!(dual_is_palindrome(&[1, 2, 1]), 1);
         assert_eq!(dual_product_evens(&[1, 2, 3, 4]), 8);
+        assert_eq!(dual_product_odds(&[1, 2, 3, 4]), 3);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -996,6 +1026,8 @@ mod tests {
         assert_eq!(index_min_odd(&[1, 9, 3, 2]), Some(2));
         assert_eq!(index_argmax_abs(&[1, -9, 3]), Some(1));
         assert_eq!(index_argmin_abs(&[5, -1, 3]), Some(1));
+        assert_eq!(index_sum_abs_even(&[-1, 2, -3, 4]), 4);
+        assert_eq!(index_sum_abs_odd(&[-1, 2, -3, 4]), 6);
         assert_eq!(k_count_eq(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
         assert_eq!(k_count_gt(&[1, 5, 3, 2], 2), 2);
@@ -1005,6 +1037,7 @@ mod tests {
         assert_eq!(k_count_ne(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_max_lt(&[1, 5, 3, 2], 4), Some(3));
         assert_eq!(k_min_gt(&[1, 5, 3, 2], 2), Some(3));
+        assert_eq!(k_sum_ne(&[1, 5, 5, 2], 5), 3);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -1045,6 +1078,7 @@ mod tests {
         assert_eq!(pairwise_is_zigzag(&[1, 3, 2, 5, 0]), 1);
         assert_eq!(pairwise_is_zigzag(&[1, 2, 3]), 0);
         assert_eq!(pairwise_min_increase(&[1, 5, 2, 9]), 4);
+        assert_eq!(pairwise_min_decrease(&[9, 2, 8, 1]), 7);
     }
 }
 EOF
@@ -1119,6 +1153,10 @@ fn filter_len_eq3(s: &str, sep: &str) -> String {
     s.split(sep).filter(|w| w.chars().count() == 3).collect::<Vec<_>>().join(sep)
 }
 
+fn filter_len_lt3(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() < 3).collect::<Vec<_>>().join(sep)
+}
+
 fn dedup_all(s: &str, sep: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     for w in s.split(sep) {
@@ -1182,6 +1220,10 @@ fn space_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == ' ').count() as i64
 }
 
+fn alpha_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_alphabetic()).count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1211,6 +1253,7 @@ mod tests {
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
         assert_eq!(filter_len_eq3("cat dog hi me", " "), "cat dog");
+        assert_eq!(filter_len_lt3("cat dog hi me", " "), "hi me");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
@@ -1224,6 +1267,7 @@ mod tests {
         assert_eq!(consonant_count("Beautiful"), 4);
         assert_eq!(sum_word_lens("a to moon", " "), 7);
         assert_eq!(space_count("a b c"), 2);
+        assert_eq!(alpha_count("Hi 2!"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
