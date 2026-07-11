@@ -1157,6 +1157,10 @@ enum DualAccum {
     SumEighthPowersEvenNonZero,
     /// Sum of eighth powers of odd-valued non-zero elements.
     SumEighthPowersOddNonZero,
+    /// Product of eighth powers of even-valued non-zero elements (none → 1).
+    ProductEighthPowersEvenNonZero,
+    /// Product of eighth powers of odd-valued non-zero elements (none → 1).
+    ProductEighthPowersOddNonZero,
 }
 
 impl DualAccum {
@@ -1388,6 +1392,8 @@ impl DualAccum {
             DualAccum::MeanSeventhPowersOddNonZeroTrunc => "mean_seventh_powers_odd_non_zero_trunc",
             DualAccum::SumEighthPowersEvenNonZero => "sum_eighth_powers_even_non_zero",
             DualAccum::SumEighthPowersOddNonZero => "sum_eighth_powers_odd_non_zero",
+            DualAccum::ProductEighthPowersEvenNonZero => "product_eighth_powers_even_non_zero",
+            DualAccum::ProductEighthPowersOddNonZero => "product_eighth_powers_odd_non_zero",
         }
     }
 
@@ -1582,7 +1588,9 @@ impl DualAccum {
                 | DualAccum::ProductSixthPowersEvenNonZero
                 | DualAccum::ProductSixthPowersOddNonZero
                 | DualAccum::ProductSeventhPowersEvenNonZero
-                | DualAccum::ProductSeventhPowersOddNonZero => Some(1),
+                | DualAccum::ProductSeventhPowersOddNonZero
+                | DualAccum::ProductEighthPowersEvenNonZero
+                | DualAccum::ProductEighthPowersOddNonZero => Some(1),
                 DualAccum::SumCubes
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
@@ -3347,6 +3355,26 @@ impl DualAccum {
                         q.saturating_mul(q)
                     })
                     .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::ProductEighthPowersEvenNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q)
+                    })
+                    .fold(1i64, i64::saturating_mul),
+            ),
+            DualAccum::ProductEighthPowersOddNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q)
+                    })
+                    .fold(1i64, i64::saturating_mul),
             ),
         }
     }
@@ -6595,6 +6623,36 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+            DualAccum::ProductEighthPowersEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                q: i64 = sq * sq;\n\
+                prod = prod * q * q;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
+            DualAccum::ProductEighthPowersOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                q: i64 = sq * sq;\n\
+                prod = prod * q * q;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7778,6 +7836,8 @@ fn try_dual_and_pairwise(
         DualAccum::MeanSeventhPowersOddNonZeroTrunc,
         DualAccum::SumEighthPowersEvenNonZero,
         DualAccum::SumEighthPowersOddNonZero,
+        DualAccum::ProductEighthPowersEvenNonZero,
+        DualAccum::ProductEighthPowersOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -10345,6 +10405,8 @@ enum KClosed {
     MeanAbsNonZeroDivisibleByKTrunc,
     /// XOR of non-zero elements divisible by k (none → 0; k == 0 → None).
     XorNonZeroDivisibleByK,
+    /// Bitwise OR of non-zero elements divisible by k (none → 0; k == 0 → None).
+    OrNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -10480,6 +10542,7 @@ impl KClosed {
             KClosed::MinAbsNonZeroDivisibleByK => "min_abs_non_zero_divisible_by_k",
             KClosed::MeanAbsNonZeroDivisibleByKTrunc => "mean_abs_non_zero_divisible_by_k_trunc",
             KClosed::XorNonZeroDivisibleByK => "xor_non_zero_divisible_by_k",
+            KClosed::OrNonZeroDivisibleByK => "or_non_zero_divisible_by_k",
         }
     }
 
@@ -11580,6 +11643,16 @@ impl KClosed {
                     arr.iter()
                         .filter(|&&v| v != 0 && v % k == 0)
                         .fold(0i64, |a, &b| a ^ b),
+                )
+            }
+            KClosed::OrNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                Some(
+                    arr.iter()
+                        .filter(|&&v| v != 0 && v % k == 0)
+                        .fold(0i64, |a, &b| a | b),
                 )
             }
         }
@@ -13491,6 +13564,19 @@ KClosed::MinWhereAbsNeK => format!(
     return x;\n\
 }}\n"
             ),
+            KClosed::OrNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    x: i64 = 0;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                x = x | item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return x;\n\
+}}\n"
+            ),
 
         }
     }
@@ -13634,6 +13720,7 @@ fn try_k_closed(
         KClosed::MinAbsNonZeroDivisibleByK,
         KClosed::MeanAbsNonZeroDivisibleByKTrunc,
         KClosed::XorNonZeroDivisibleByK,
+        KClosed::OrNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -15076,5 +15163,9 @@ mod tests {
         assert_eq!(DualAccum::SumEighthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(6562));
         assert_eq!(DualAccum::SumEighthPowersEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::XorNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(2));
+        assert_eq!(DualAccum::ProductEighthPowersEvenNonZero.eval(&[0, -2, 2, 3]), Some(65536));
+        assert_eq!(DualAccum::ProductEighthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(6561));
+        assert_eq!(DualAccum::ProductEighthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
+        assert_eq!(KClosed::OrNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(6));
     }
 }
