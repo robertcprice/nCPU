@@ -458,6 +458,13 @@ fn dual_and_all(arr: &[i64]) -> i64 {
     arr.iter().copied().fold(-1i64, |a, b| a & b)
 }
 
+fn dual_count_eq_mean(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let sum: i64 = arr.iter().copied().sum();
+    let mean = sum / (arr.len() as i64);
+    Some(arr.iter().filter(|&&x| x == mean).count() as i64)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -811,6 +818,13 @@ fn pairwise_mean_sq_diff_trunc(arr: &[i64]) -> i64 {
     pairwise_sum_sq_diff(arr) / ((arr.len() - 1) as i64)
 }
 
+fn pairwise_first_increase_idx(arr: &[i64]) -> i64 {
+    for i in 1..arr.len() {
+        if arr[i] > arr[i - 1] { return i as i64; }
+    }
+    -1
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -994,6 +1008,20 @@ fn k_first_le(arr: &[i64], k: i64) -> i64 {
     -1
 }
 
+fn k_last_ge(arr: &[i64], k: i64) -> i64 {
+    for i in (0..arr.len()).rev() {
+        if arr[i] >= k { return i as i64; }
+    }
+    -1
+}
+
+fn k_last_le(arr: &[i64], k: i64) -> i64 {
+    for i in (0..arr.len()).rev() {
+        if arr[i] <= k { return i as i64; }
+    }
+    -1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,6 +1190,7 @@ mod tests {
         assert_eq!(dual_product_non_zeros(&[0, 2, 3, 0]), 6);
         assert_eq!(dual_or_all(&[1, 2, 4]), 7);
         assert_eq!(dual_and_all(&[7, 3, 1]), 1);
+        assert_eq!(dual_count_eq_mean(&[1, 2, 3, 2]), Some(2));
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1195,6 +1224,8 @@ mod tests {
         assert_eq!(k_sum_le(&[1, 5, 3, 2], 3), 6);
         assert_eq!(k_first_ge(&[1, 5, 3, 2], 3), 1);
         assert_eq!(k_first_le(&[5, 4, 1, 2], 2), 2);
+        assert_eq!(k_last_ge(&[1, 5, 3, 2], 3), 2);
+        assert_eq!(k_last_le(&[5, 4, 1, 2], 2), 3);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1242,6 +1273,8 @@ mod tests {
         assert_eq!(pairwise_count_sign_changes(&[1, 3, 2, 5, 0]), 3);
         assert_eq!(pairwise_sum_sq_diff(&[1, 4, 2]), 13);
         assert_eq!(pairwise_mean_sq_diff_trunc(&[1, 4, 2]), 6);
+        assert_eq!(pairwise_first_increase_idx(&[5, 4, 1, 3]), 3);
+        assert_eq!(pairwise_first_increase_idx(&[5, 4, 1]), -1);
     }
 }
 EOF
@@ -1432,6 +1465,15 @@ fn cap_first_word(s: &str, sep: &str) -> String {
     out.join(sep)
 }
 
+fn reverse_last_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { return String::new(); }
+    let mut out: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let last = out.len() - 1;
+    out[last] = out[last].chars().rev().collect();
+    out.join(sep)
+}
+
 fn digit_sum(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_digit()).map(|c| (c as u8 - b'0') as i64).sum()
 }
@@ -1443,6 +1485,10 @@ fn digit_product(s: &str) -> i64 {
 
 fn punctuation_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_punctuation()).count() as i64
+}
+
+fn tab_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '\t').count() as i64
 }
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
@@ -1495,9 +1541,11 @@ mod tests {
         assert_eq!(cap_last_word("hello world", " "), "hello World");
         assert_eq!(reverse_first_word("abc def", " "), "cba def");
         assert_eq!(cap_first_word("hello world", " "), "Hello world");
+        assert_eq!(reverse_last_word("abc def", " "), "abc fed");
         assert_eq!(digit_sum("a12b3"), 6);
         assert_eq!(digit_product("a23b"), 6);
         assert_eq!(punctuation_count("Hi, you!"), 2);
+        assert_eq!(tab_count("a\tb\tc"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
