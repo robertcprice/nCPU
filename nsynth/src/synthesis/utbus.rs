@@ -913,6 +913,10 @@ enum DualAccum {
     ProductNonZeroEvens,
     /// Product of nonzero odd-valued elements (none → 1).
     ProductNonZeroOdds,
+    /// Truncating mean of |x| for even-valued elements (none → 0).
+    MeanAbsEvensTrunc,
+    /// Truncating mean of |x| for odd-valued elements (none → 0).
+    MeanAbsOddsTrunc,
 }
 
 impl DualAccum {
@@ -1022,6 +1026,8 @@ impl DualAccum {
             DualAccum::SumNonZeroOdds => "sum_nonzero_odds",
             DualAccum::ProductNonZeroEvens => "product_nonzero_evens",
             DualAccum::ProductNonZeroOdds => "product_nonzero_odds",
+            DualAccum::MeanAbsEvensTrunc => "mean_abs_evens_trunc",
+            DualAccum::MeanAbsOddsTrunc => "mean_abs_odds_trunc",
         }
     }
 
@@ -1061,6 +1067,8 @@ impl DualAccum {
                 | DualAccum::MaxAbsOdds
                 | DualAccum::MinAbsEvens
                 | DualAccum::MinAbsOdds
+                | DualAccum::MeanAbsEvensTrunc
+                | DualAccum::MeanAbsOddsTrunc
                 | DualAccum::AbsRange
                 | DualAccum::SumPositives
                 | DualAccum::SumNegatives
@@ -1814,6 +1822,22 @@ impl DualAccum {
                     .copied()
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanAbsEvensTrunc => {
+                let vals: Vec<i64> = arr.iter().filter(|&&x| x % 2 == 0).map(|&x| x.abs()).collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    Some(vals.iter().sum::<i64>() / vals.len() as i64)
+                }
+            }
+            DualAccum::MeanAbsOddsTrunc => {
+                let vals: Vec<i64> = arr.iter().filter(|&&x| x % 2 != 0).map(|&x| x.abs()).collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    Some(vals.iter().sum::<i64>() / vals.len() as i64)
+                }
+            }
         }
     }
 
@@ -3101,6 +3125,42 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+            DualAccum::MeanAbsEvensTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + a;\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    if count == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
+            DualAccum::MeanAbsOddsTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + a;\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    if count == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
 
 
         }
@@ -4163,6 +4223,8 @@ fn try_dual_and_pairwise(
         DualAccum::SumNonZeroOdds,
         DualAccum::ProductNonZeroEvens,
         DualAccum::ProductNonZeroOdds,
+        DualAccum::MeanAbsEvensTrunc,
+        DualAccum::MeanAbsOddsTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -6608,6 +6670,8 @@ enum KClosed {
     MinWhereAbsGtK,
     /// Min among elements with |v| < k (none → 0).
     MinWhereAbsLtK,
+    /// Max among elements with |v| >= k (none → 0).
+    MaxWhereAbsGeK,
 }
 
 impl KClosed {
@@ -6682,6 +6746,7 @@ impl KClosed {
             KClosed::MaxWhereAbsGtK => "max_where_abs_gt_k",
             KClosed::MinWhereAbsGtK => "min_where_abs_gt_k",
             KClosed::MinWhereAbsLtK => "min_where_abs_lt_k",
+            KClosed::MaxWhereAbsGeK => "max_where_abs_ge_k",
         }
     }
 
@@ -7191,6 +7256,19 @@ impl KClosed {
                 for &v in arr {
                     if v.abs() < k {
                         if !found || v < best {
+                            best = v;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            KClosed::MaxWhereAbsGeK => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &v in arr {
+                    if v.abs() >= k {
+                        if !found || v > best {
                             best = v;
                             found = true;
                         }
@@ -8142,6 +8220,25 @@ KClosed::MinWhereAbsNeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::MaxWhereAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a >= k {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item > best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -8223,6 +8320,7 @@ fn try_k_closed(
         KClosed::MaxWhereAbsGtK,
         KClosed::MinWhereAbsGtK,
         KClosed::MinWhereAbsLtK,
+        KClosed::MaxWhereAbsGeK,
     ] {
         let ok = inputs
             .iter()
@@ -9439,5 +9537,8 @@ mod tests {
         assert_eq!(DualAccum::ProductNonZeroEvens.eval(&[-4, 0, 3, 2]), Some(-8));
         assert_eq!(DualAccum::ProductNonZeroOdds.eval(&[-4, 0, 3, 2]), Some(3));
         assert_eq!(KClosed::MinWhereAbsLtK.eval(&[-5, 2, 4, 1], 4), Some(1));
+        assert_eq!(DualAccum::MeanAbsEvensTrunc.eval(&[-4, 3, 2]), Some(3));
+        assert_eq!(DualAccum::MeanAbsOddsTrunc.eval(&[-4, 3, 2]), Some(3));
+        assert_eq!(KClosed::MaxWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(4));
     }
 }
