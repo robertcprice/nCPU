@@ -748,8 +748,12 @@ enum WordShape {
     DropFirstThree,
     /// Keep only the last two words.
     TakeLastTwo,
+    /// Keep only the last three words.
+    TakeLastThree,
     /// Drop the last two words, rejoin.
     DropLastTwo,
+    /// Drop the last three words, rejoin.
+    DropLastThree,
     /// Capitalize only the last word (first char upper).
     CapLastWord,
     /// Reverse characters of the first word only.
@@ -800,7 +804,9 @@ impl WordShape {
             WordShape::DropFirstTwo => "drop_first_two",
             WordShape::DropFirstThree => "drop_first_three",
             WordShape::TakeLastTwo => "take_last_two",
+            WordShape::TakeLastThree => "take_last_three",
             WordShape::DropLastTwo => "drop_last_two",
+            WordShape::DropLastThree => "drop_last_three",
             WordShape::CapLastWord => "cap_last_word",
             WordShape::ReverseFirstWord => "reverse_first_word",
             WordShape::CapFirstWord => "cap_first_word",
@@ -1019,11 +1025,25 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[words.len() - 2..].join(sep)
             }
         }
+        WordShape::TakeLastThree => {
+            if words.len() <= 3 {
+                words.join(sep)
+            } else {
+                words[words.len() - 3..].join(sep)
+            }
+        }
         WordShape::DropLastTwo => {
             if words.len() <= 2 {
                 String::new()
             } else {
                 words[..words.len() - 2].join(sep)
+            }
+        }
+        WordShape::DropLastThree => {
+            if words.len() <= 3 {
+                String::new()
+            } else {
+                words[..words.len() - 3].join(sep)
             }
         }
         WordShape::CapLastWord => {
@@ -1182,8 +1202,14 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::TakeLastTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 2 {{\n        start = words.len - 2;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::TakeLastThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 3 {{\n        start = words.len - 3;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::DropLastTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 2 {{\n        end = end - 2;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropLastThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 3 {{\n        end = end - 3;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::CapLastWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    w: string = words[words.len - 1];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    return out.join(\"{sep}\");\n}}\n"
@@ -1227,7 +1253,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 40] = [
+    const SHAPES: [WordShape; 42] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1261,7 +1287,9 @@ pub fn synthesize_word_program(
         WordShape::DropFirstTwo,
         WordShape::DropFirstThree,
         WordShape::TakeLastTwo,
+        WordShape::TakeLastThree,
         WordShape::DropLastTwo,
+        WordShape::DropLastThree,
         WordShape::CapLastWord,
         WordShape::ReverseFirstWord,
         WordShape::CapFirstWord,
@@ -2177,6 +2205,43 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-alnum_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Non-alphanumeric char count.
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| !c.is_ascii_alphanumeric())
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        hit: i64 = 1;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{ hit = 0; }}\n\
+        }}\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{ hit = 0; }}\n\
+        }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-non_alnum_count".to_string(),
                 error: None,
             });
         }

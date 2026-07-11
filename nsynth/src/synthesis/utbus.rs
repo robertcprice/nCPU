@@ -837,6 +837,10 @@ enum DualAccum {
     MaxEvenValue,
     /// Max among odd-valued elements (none → 0).
     MaxOddValue,
+    /// Min among even-valued elements (none → 0).
+    MinEvenValue,
+    /// Min among odd-valued elements (none → 0).
+    MinOddValue,
 }
 
 impl DualAccum {
@@ -908,6 +912,8 @@ impl DualAccum {
             DualAccum::CountPositives => "count_positives",
             DualAccum::MaxEvenValue => "max_even_value",
             DualAccum::MaxOddValue => "max_odd_value",
+            DualAccum::MinEvenValue => "min_even_value",
+            DualAccum::MinOddValue => "min_odd_value",
         }
     }
 
@@ -936,6 +942,8 @@ impl DualAccum {
                 | DualAccum::CountPositives
                 | DualAccum::MaxEvenValue
                 | DualAccum::MaxOddValue
+                | DualAccum::MinEvenValue
+                | DualAccum::MinOddValue
                 | DualAccum::SumPositives
                 | DualAccum::SumNegatives
                 | DualAccum::SumSquares
@@ -1424,6 +1432,32 @@ impl DualAccum {
                 for &x in arr {
                     if x % 2 != 0 {
                         if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            DualAccum::MinEvenValue => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x % 2 == 0 {
+                        if !found || x < best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            DualAccum::MinOddValue => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x % 2 != 0 {
+                        if !found || x < best {
                             best = x;
                             found = true;
                         }
@@ -2210,6 +2244,40 @@ impl DualAccum {
                 found = 1;\n\
             }} else {{\n\
                 if item > best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MinEvenValue => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item < best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MinOddValue => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item < best {{ best = item; }}\n\
             }}\n\
         }}\n\
     }}\n\
@@ -3238,6 +3306,8 @@ fn try_dual_and_pairwise(
         DualAccum::CountPositives,
         DualAccum::MaxEvenValue,
         DualAccum::MaxOddValue,
+        DualAccum::MinEvenValue,
+        DualAccum::MinOddValue,
     ] {
         let ok = inputs
             .iter()
@@ -3344,6 +3414,8 @@ fn try_dual_and_pairwise(
         IndexScan::ProductAbsOddIndices,
         IndexScan::SumSquaresEvenIndices,
         IndexScan::SumSquaresOddIndices,
+        IndexScan::MeanEvenTrunc,
+        IndexScan::MeanOddTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -3437,6 +3509,10 @@ enum IndexScan {
     SumSquaresEvenIndices,
     /// Sum of squares at odd indices.
     SumSquaresOddIndices,
+    /// Truncating mean of even-index elements (empty → 0).
+    MeanEvenTrunc,
+    /// Truncating mean of odd-index elements (no odd → 0).
+    MeanOddTrunc,
 }
 
 impl IndexScan {
@@ -3477,6 +3553,8 @@ impl IndexScan {
             IndexScan::ProductAbsOddIndices => "product_abs_odd_indices",
             IndexScan::SumSquaresEvenIndices => "sum_squares_even_indices",
             IndexScan::SumSquaresOddIndices => "sum_squares_odd_indices",
+            IndexScan::MeanEvenTrunc => "mean_even_trunc",
+            IndexScan::MeanOddTrunc => "mean_odd_trunc",
         }
     }
 
@@ -3785,6 +3863,34 @@ impl IndexScan {
                     .map(|(_, &v)| v.saturating_mul(v))
                     .fold(0i64, i64::saturating_add),
             ),
+            IndexScan::MeanEvenTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 0)
+                    .map(|(_, &v)| v)
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    let sum = vals.iter().copied().fold(0i64, i64::saturating_add);
+                    Some(sum / (vals.len() as i64))
+                }
+            }
+            IndexScan::MeanOddTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 1)
+                    .map(|(_, &v)| v)
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    let sum = vals.iter().copied().fold(0i64, i64::saturating_add);
+                    Some(sum / (vals.len() as i64))
+                }
+            }
         }
     }
 
@@ -4191,6 +4297,34 @@ impl IndexScan {
     return total;\n\
 }}\n"
             ),
+            IndexScan::MeanEvenTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 0; }}\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i];\n\
+        count = count + 1;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
+            IndexScan::MeanOddTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len < 2 {{ return 0; }}\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i];\n\
+        count = count + 1;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4258,6 +4392,8 @@ enum KClosed {
     CountAbsGtK,
     /// Count of elements with |v| < k.
     CountAbsLtK,
+    /// Sum of |v| for elements with v >= k.
+    SumAbsGeK,
 }
 
 impl KClosed {
@@ -4293,6 +4429,7 @@ impl KClosed {
             KClosed::SumAbsLtK => "sum_abs_lt_k",
             KClosed::CountAbsGtK => "count_abs_gt_k",
             KClosed::CountAbsLtK => "count_abs_lt_k",
+            KClosed::SumAbsGeK => "sum_abs_ge_k",
         }
     }
 
@@ -4482,6 +4619,12 @@ impl KClosed {
             KClosed::CountAbsLtK => {
                 Some(arr.iter().filter(|&&v| v.abs() < k).count() as i64)
             }
+            KClosed::SumAbsGeK => Some(
+                arr.iter()
+                    .filter(|&&v| v >= k)
+                    .map(|&v| v.abs())
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -4841,6 +4984,19 @@ impl KClosed {
     return count;\n\
 }}\n"
             ),
+            KClosed::SumAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item >= k {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + a;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4883,6 +5039,7 @@ fn try_k_closed(
         KClosed::SumAbsLtK,
         KClosed::CountAbsGtK,
         KClosed::CountAbsLtK,
+        KClosed::SumAbsGeK,
     ] {
         let ok = inputs
             .iter()
@@ -5972,5 +6129,10 @@ mod tests {
         assert_eq!(IndexScan::SumSquaresEvenIndices.eval(&[2, 9, 3, 8]), Some(13));
         assert_eq!(IndexScan::SumSquaresOddIndices.eval(&[2, 9, 3, 8]), Some(145));
         assert_eq!(KClosed::CountAbsLtK.eval(&[-5, 2, 4], 3), Some(1));
+        assert_eq!(DualAccum::MinEvenValue.eval(&[1, 8, 3, 4]), Some(4));
+        assert_eq!(DualAccum::MinOddValue.eval(&[1, 8, 3, 4]), Some(1));
+        assert_eq!(IndexScan::MeanEvenTrunc.eval(&[2, 9, 4, 8]), Some(3));
+        assert_eq!(IndexScan::MeanOddTrunc.eval(&[2, 9, 4, 8]), Some(8));
+        assert_eq!(KClosed::SumAbsGeK.eval(&[-5, 2, 4], 2), Some(6));
     }
 }
