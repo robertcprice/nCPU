@@ -1071,6 +1071,14 @@ fn index_sum_positive_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v > 0).map(|(_,&v)| v).sum()
 }
 
+fn index_sum_negative_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==0 && v < 0).map(|(_,&v)| v).sum()
+}
+
+fn index_sum_negative_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v < 0).map(|(_,&v)| v).sum()
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1218,6 +1226,13 @@ fn k_count_abs_eq(arr: &[i64], k: i64) -> i64 {
 fn k_first_abs_ge(arr: &[i64], k: i64) -> i64 {
     for (i, &v) in arr.iter().enumerate() {
         if v.abs() >= k { return i as i64; }
+    }
+    -1
+}
+
+fn k_last_abs_ge(arr: &[i64], k: i64) -> i64 {
+    for i in (0..arr.len()).rev() {
+        if arr[i].abs() >= k { return i as i64; }
     }
     -1
 }
@@ -1442,6 +1457,7 @@ mod tests {
         assert_eq!(k_sum_abs_le(&[-5, 2, 4], 2), 7);
         assert_eq!(k_count_abs_eq(&[-5, 2, 5, 4], 5), 2);
         assert_eq!(k_first_abs_ge(&[1, -5, 2], 4), 1);
+        assert_eq!(k_last_abs_ge(&[5, 1, -5, 2], 4), 2);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1458,6 +1474,8 @@ mod tests {
         assert_eq!(index_count_negative_odd(&[-1, 2, 3, -4]), 1);
         assert_eq!(index_sum_positive_even(&[-1, 2, 3, -4]), 3);
         assert_eq!(index_sum_positive_odd(&[-1, 2, 3, -4]), 2);
+        assert_eq!(index_sum_negative_even(&[-1, 2, 3, -4]), -1);
+        assert_eq!(index_sum_negative_odd(&[-1, 2, 3, -4]), -4);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1561,6 +1579,11 @@ fn first_word(s: &str, sep: &str) -> String {
 
 fn last_word(s: &str, sep: &str) -> String {
     s.split(sep).last().unwrap_or("").to_string()
+}
+
+fn penultimate_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() < 2 { String::new() } else { words[words.len()-2].to_string() }
 }
 
 fn middle_word(s: &str, sep: &str) -> String {
@@ -1799,6 +1822,10 @@ fn slash_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '/').count() as i64
 }
 
+fn dot_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '.').count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1824,6 +1851,7 @@ mod tests {
         assert_eq!(drop_first("keep the rest", " "), "the rest");
         assert_eq!(first_word("alpha beta gamma", " "), "alpha");
         assert_eq!(last_word("alpha beta gamma", " "), "gamma");
+        assert_eq!(penultimate_word("alpha beta gamma", " "), "beta");
         assert_eq!(middle_word("alpha beta gamma", " "), "beta");
         assert_eq!(second_word("alpha beta gamma", " "), "beta");
         assert_eq!(third_word("alpha beta gamma delta", " "), "gamma");
@@ -1870,6 +1898,7 @@ mod tests {
         assert_eq!(underscore_count("a_b__c"), 3);
         assert_eq!(hyphen_count("a-b--c"), 3);
         assert_eq!(slash_count("a/b//c"), 3);
+        assert_eq!(dot_count("a.b..c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
