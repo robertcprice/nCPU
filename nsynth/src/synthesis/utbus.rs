@@ -1033,6 +1033,10 @@ enum DualAccum {
     AnyEvenNonNegative,
     /// 1 if any odd-valued element is non-negative (none → 0).
     AnyOddNonNegative,
+    /// 1 if any even-valued element is non-positive (none → 0).
+    AnyEvenNonPositive,
+    /// 1 if any odd-valued element is non-positive (none → 0).
+    AnyOddNonPositive,
 }
 
 impl DualAccum {
@@ -1202,6 +1206,8 @@ impl DualAccum {
             DualAccum::AllOddNonPositive => "all_odd_non_positive",
             DualAccum::AnyEvenNonNegative => "any_even_non_negative",
             DualAccum::AnyOddNonNegative => "any_odd_non_negative",
+            DualAccum::AnyEvenNonPositive => "any_even_non_positive",
+            DualAccum::AnyOddNonPositive => "any_odd_non_positive",
         }
     }
 
@@ -1228,7 +1234,9 @@ impl DualAccum {
                 | DualAccum::AnyEvenNonZero
                 | DualAccum::AnyOddNonZero
                 | DualAccum::AnyEvenNonNegative
-                | DualAccum::AnyOddNonNegative => Some(0),
+                | DualAccum::AnyOddNonNegative
+                | DualAccum::AnyEvenNonPositive
+                | DualAccum::AnyOddNonPositive => Some(0),
                 DualAccum::CountNegatives
                 | DualAccum::CountEvens
                 | DualAccum::CountOdds
@@ -2521,6 +2529,20 @@ impl DualAccum {
             ),
             DualAccum::AnyOddNonNegative => Some(
                 if arr.iter().filter(|&&x| x % 2 != 0).any(|&x| x >= 0) {
+                    1
+                } else {
+                    0
+                },
+            ),
+            DualAccum::AnyEvenNonPositive => Some(
+                if arr.iter().filter(|&&x| x % 2 == 0).any(|&x| x <= 0) {
+                    1
+                } else {
+                    0
+                },
+            ),
+            DualAccum::AnyOddNonPositive => Some(
+                if arr.iter().filter(|&&x| x % 2 != 0).any(|&x| x <= 0) {
                     1
                 } else {
                     0
@@ -4722,6 +4744,31 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
+            DualAccum::AnyEvenNonPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item <= 0 {{\n\
+                return 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::AnyOddNonPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item <= 0 {{\n\
+                return 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -5842,6 +5889,8 @@ fn try_dual_and_pairwise(
         DualAccum::AllOddNonPositive,
         DualAccum::AnyEvenNonNegative,
         DualAccum::AnyOddNonNegative,
+        DualAccum::AnyEvenNonPositive,
+        DualAccum::AnyOddNonPositive,
     ] {
         let ok = inputs
             .iter()
@@ -8345,6 +8394,8 @@ enum KClosed {
     FirstIndexWhereAbsGtK,
     /// Last index where |v| > k (none → -1).
     LastIndexWhereAbsGtK,
+    /// First index where |v| < k (none → -1).
+    FirstIndexWhereAbsLtK,
 }
 
 impl KClosed {
@@ -8448,6 +8499,7 @@ impl KClosed {
             KClosed::LastIndexWhereAbsNeK => "last_index_where_abs_ne_k",
             KClosed::FirstIndexWhereAbsGtK => "first_index_where_abs_gt_k",
             KClosed::LastIndexWhereAbsGtK => "last_index_where_abs_gt_k",
+            KClosed::FirstIndexWhereAbsLtK => "first_index_where_abs_lt_k",
         }
     }
 
@@ -9176,6 +9228,14 @@ impl KClosed {
             KClosed::LastIndexWhereAbsGtK => {
                 for (i, &v) in arr.iter().enumerate().rev() {
                     if v.abs() > k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::FirstIndexWhereAbsLtK => {
+                for (i, &v) in arr.iter().enumerate() {
+                    if v.abs() < k {
                         return Some(i as i64);
                     }
                 }
@@ -10556,6 +10616,22 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::FirstIndexWhereAbsLtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        item: i64 = arr[i];\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a < k {{\n\
+            return i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -10666,6 +10742,7 @@ fn try_k_closed(
         KClosed::LastIndexWhereAbsNeK,
         KClosed::FirstIndexWhereAbsGtK,
         KClosed::LastIndexWhereAbsGtK,
+        KClosed::FirstIndexWhereAbsLtK,
     ] {
         let ok = inputs
             .iter()
@@ -11981,5 +12058,9 @@ mod tests {
         assert_eq!(DualAccum::AnyOddNonNegative.eval(&[-2, -3, 5]), Some(1));
         assert_eq!(DualAccum::AnyEvenNonNegative.eval(&[-2, 3, -4]), Some(0));
         assert_eq!(KClosed::LastIndexWhereAbsGtK.eval(&[-5, 2, 6], 4), Some(2));
+        assert_eq!(DualAccum::AnyEvenNonPositive.eval(&[-2, 3, 4]), Some(1));
+        assert_eq!(DualAccum::AnyOddNonPositive.eval(&[2, -3, 5]), Some(1));
+        assert_eq!(DualAccum::AnyEvenNonPositive.eval(&[2, 3, 4]), Some(0));
+        assert_eq!(KClosed::FirstIndexWhereAbsLtK.eval(&[-5, 2, 4], 4), Some(1));
     }
 }
