@@ -166,6 +166,16 @@ fn pairwise_count_adj_diff(arr: &[i64]) -> i64 {
     (1..arr.len()).filter(|&i| arr[i] != arr[i - 1]).count() as i64
 }
 
+fn pairwise_count_increases(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    (1..arr.len()).filter(|&i| arr[i] > arr[i - 1]).count() as i64
+}
+
+fn pairwise_strictly_increasing(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 1; }
+    if (1..arr.len()).all(|i| arr[i] > arr[i - 1]) { 1 } else { 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,11 +261,40 @@ mod tests {
     fn pairwise_max_abs_and_count_diff() {
         assert_eq!(pairwise_max_abs_diff(&[10, 3, 8]), 7);
         assert_eq!(pairwise_count_adj_diff(&[1, 1, 2, 2, 3]), 2);
+        assert_eq!(pairwise_count_increases(&[1, 3, 2, 5]), 2);
+        assert_eq!(pairwise_strictly_increasing(&[1, 2, 4]), 1);
+        assert_eq!(pairwise_strictly_increasing(&[1, 2, 2]), 0);
     }
 }
 EOF
 ( cd "$TMP/utbus_reduce" && cargo test --lib -q )
 echo "utbus_reduce: OK"
+
+echo "== string nonempty_split_count standalone =="
+mkdir -p "$TMP/str_count/src"
+cat > "$TMP/str_count/Cargo.toml" <<'EOF'
+[package]
+name = "str_count_test"
+version = "0.1.0"
+edition = "2021"
+EOF
+cat > "$TMP/str_count/src/lib.rs" <<'EOF'
+fn nonempty_split_count(s: &str, sep: &str) -> i64 {
+    s.split(sep).filter(|p| !p.is_empty()).count() as i64
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn skips_padding() {
+        assert_eq!(nonempty_split_count("  two words  ", " "), 2);
+        assert_eq!(nonempty_split_count("hello world", " "), 2);
+        assert_eq!(nonempty_split_count("a--b--c", "-"), 3);
+    }
+}
+EOF
+( cd "$TMP/str_count" && cargo test --lib -q )
+echo "str_count: OK"
 
 if [[ -f "$ROOT/src/schema_component.rs" ]]; then
   echo "== schema_component note =="

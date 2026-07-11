@@ -725,6 +725,10 @@ enum PairwiseScan {
     MaxAbsDiff,
     /// Count positions where `arr[i] != arr[i-1]`.
     CountAdjacentDiff,
+    /// Count positions where `arr[i] > arr[i-1]`.
+    CountIncreases,
+    /// 1 if strictly increasing for all adjacent pairs, else 0.
+    StrictlyIncreasing,
 }
 
 impl PairwiseScan {
@@ -732,12 +736,17 @@ impl PairwiseScan {
         match self {
             PairwiseScan::MaxAbsDiff => "max_abs_diff",
             PairwiseScan::CountAdjacentDiff => "count_adjacent_diff",
+            PairwiseScan::CountIncreases => "count_increases",
+            PairwiseScan::StrictlyIncreasing => "strictly_increasing",
         }
     }
 
     fn eval(self, arr: &[i64]) -> Option<i64> {
         if arr.len() < 2 {
-            return Some(0);
+            return Some(match self {
+                PairwiseScan::StrictlyIncreasing => 1,
+                _ => 0,
+            });
         }
         match self {
             PairwiseScan::MaxAbsDiff => {
@@ -761,6 +770,23 @@ impl PairwiseScan {
                     }
                 }
                 Some(count)
+            }
+            PairwiseScan::CountIncreases => {
+                let mut count = 0i64;
+                for i in 1..arr.len() {
+                    if arr[i] > arr[i - 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
+            PairwiseScan::StrictlyIncreasing => {
+                for i in 1..arr.len() {
+                    if arr[i] <= arr[i - 1] {
+                        return Some(0);
+                    }
+                }
+                Some(1)
             }
         }
     }
@@ -793,6 +819,31 @@ impl PairwiseScan {
     return count;\n\
 }}\n"
             ),
+            PairwiseScan::CountIncreases => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] > arr[i - 1] {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            PairwiseScan::StrictlyIncreasing => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] <= arr[i - 1] {{\n\
+            return 0;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -822,7 +873,12 @@ fn try_dual_and_pairwise(
             });
         }
     }
-    for scan in [PairwiseScan::MaxAbsDiff, PairwiseScan::CountAdjacentDiff] {
+    for scan in [
+        PairwiseScan::MaxAbsDiff,
+        PairwiseScan::CountAdjacentDiff,
+        PairwiseScan::CountIncreases,
+        PairwiseScan::StrictlyIncreasing,
+    ] {
         let ok = inputs
             .iter()
             .zip(expected.iter())
@@ -1418,6 +1474,9 @@ mod tests {
             Some(2)
         );
         assert_eq!(PairwiseScan::CountAdjacentDiff.eval(&[7]), Some(0));
+        assert_eq!(PairwiseScan::CountIncreases.eval(&[1, 3, 2, 5]), Some(2));
+        assert_eq!(PairwiseScan::StrictlyIncreasing.eval(&[1, 2, 4]), Some(1));
+        assert_eq!(PairwiseScan::StrictlyIncreasing.eval(&[1, 2, 2]), Some(0));
     }
 
     #[test]
@@ -1458,5 +1517,29 @@ mod tests {
             |arr| PairwiseScan::MaxAbsDiff.eval(arr).unwrap_or(0),
         );
         assert_solves(&problem, "max_abs_diff");
+    }
+
+    #[test]
+    fn utbus_solves_count_increases() {
+        let problem = array_problem(
+            "count_increases",
+            "fn count_increases(arr: [i64]) -> i64",
+            &[&[1, 3, 2, 5], &[5, 4, 3], &[1, 2, 3, 4], &[7]],
+            &[&[0, 0, 1], &[2, 1, 3, 3]],
+            |arr| PairwiseScan::CountIncreases.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "count_increases");
+    }
+
+    #[test]
+    fn utbus_solves_strictly_increasing() {
+        let problem = array_problem(
+            "strictly_increasing",
+            "fn strictly_increasing(arr: [i64]) -> i64",
+            &[&[1, 2, 4], &[1, 2, 2], &[5], &[3, 1], &[0, 1, 2, 3]],
+            &[&[9, 10], &[4, 4]],
+            |arr| PairwiseScan::StrictlyIncreasing.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "strictly_increasing");
     }
 }
