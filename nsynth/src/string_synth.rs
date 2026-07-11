@@ -908,6 +908,8 @@ enum WordShape {
     JoinWithCommaSlash,
     JoinWithSemiSlash,
     JoinWithColonBang,
+    /// Join words with "?!".
+    JoinWithQuestionBang,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1063,6 +1065,7 @@ impl WordShape {
             WordShape::JoinWithCommaSlash => "join_with_comma_slash",
             WordShape::JoinWithSemiSlash => "join_with_semi_slash",
             WordShape::JoinWithColonBang => "join_with_colon_bang",
+            WordShape::JoinWithQuestionBang => "join_with_question_bang",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1536,6 +1539,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithCommaSlash => words.join(",/"),
         WordShape::JoinWithSemiSlash => words.join(";/"),
         WordShape::JoinWithColonBang => words.join(":!"),
+        WordShape::JoinWithQuestionBang => words.join("?!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1993,6 +1997,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithColonBang => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\":!\");\n}}\n"
         ),
+        WordShape::JoinWithQuestionBang => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"?!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -2170,6 +2177,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithCommaSlash,
         WordShape::JoinWithSemiSlash,
         WordShape::JoinWithColonBang,
+        WordShape::JoinWithQuestionBang,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2574,6 +2582,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Letter 'y'/'Y' count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.eq_ignore_ascii_case(&'y')).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c == \"x\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-y_count".to_string(),
                 error: None,
             });
         }
