@@ -37,8 +37,8 @@ TASKS = [
         "selection_sort:wrong_compare",
         "algorithms/sorting/selection_sort.py",
         "python3 -m pytest tests/test_sorting.py -q",
-        "if array[j] > array[minimum]:",
         "if array[j] < array[minimum]:",
+        "if array[j] > array[minimum]:",
     ),
     (
         "insertion_sort:wrong_compare",
