@@ -3452,6 +3452,8 @@ fn try_dual_and_pairwise(
         IndexScan::MeanOddTrunc,
         IndexScan::CountPositiveEvenIndices,
         IndexScan::CountPositiveOddIndices,
+        IndexScan::CountNegativeEvenIndices,
+        IndexScan::CountNegativeOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -3553,6 +3555,10 @@ enum IndexScan {
     CountPositiveEvenIndices,
     /// Count of positive values at odd indices.
     CountPositiveOddIndices,
+    /// Count of negative values at even indices.
+    CountNegativeEvenIndices,
+    /// Count of negative values at odd indices.
+    CountNegativeOddIndices,
 }
 
 impl IndexScan {
@@ -3597,6 +3603,8 @@ impl IndexScan {
             IndexScan::MeanOddTrunc => "mean_odd_trunc",
             IndexScan::CountPositiveEvenIndices => "count_positive_even_indices",
             IndexScan::CountPositiveOddIndices => "count_positive_odd_indices",
+            IndexScan::CountNegativeEvenIndices => "count_negative_even_indices",
+            IndexScan::CountNegativeOddIndices => "count_negative_odd_indices",
         }
     }
 
@@ -3943,6 +3951,18 @@ impl IndexScan {
                 arr.iter()
                     .enumerate()
                     .filter(|(i, &v)| i % 2 == 1 && v > 0)
+                    .count() as i64,
+            ),
+            IndexScan::CountNegativeEvenIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, &v)| i % 2 == 0 && v < 0)
+                    .count() as i64,
+            ),
+            IndexScan::CountNegativeOddIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, &v)| i % 2 == 1 && v < 0)
                     .count() as i64,
             ),
         }
@@ -4405,6 +4425,32 @@ impl IndexScan {
     return count;\n\
 }}\n"
             ),
+            IndexScan::CountNegativeEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        if arr[i] < 0 {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            IndexScan::CountNegativeOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] < 0 {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4476,6 +4522,8 @@ enum KClosed {
     SumAbsGeK,
     /// Sum of |v| for elements with v <= k.
     SumAbsLeK,
+    /// Count of elements with |v| == k.
+    CountAbsEqK,
 }
 
 impl KClosed {
@@ -4513,6 +4561,7 @@ impl KClosed {
             KClosed::CountAbsLtK => "count_abs_lt_k",
             KClosed::SumAbsGeK => "sum_abs_ge_k",
             KClosed::SumAbsLeK => "sum_abs_le_k",
+            KClosed::CountAbsEqK => "count_abs_eq_k",
         }
     }
 
@@ -4714,6 +4763,9 @@ impl KClosed {
                     .map(|&v| v.abs())
                     .fold(0i64, i64::saturating_add),
             ),
+            KClosed::CountAbsEqK => {
+                Some(arr.iter().filter(|&&v| v.abs() == k).count() as i64)
+            }
         }
     }
 
@@ -5099,6 +5151,19 @@ impl KClosed {
     return total;\n\
 }}\n"
             ),
+            KClosed::CountAbsEqK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a == k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -5143,6 +5208,7 @@ fn try_k_closed(
         KClosed::CountAbsLtK,
         KClosed::SumAbsGeK,
         KClosed::SumAbsLeK,
+        KClosed::CountAbsEqK,
     ] {
         let ok = inputs
             .iter()
@@ -6241,5 +6307,8 @@ mod tests {
         assert_eq!(IndexScan::CountPositiveEvenIndices.eval(&[-1, 2, 3, -4]), Some(1));
         assert_eq!(IndexScan::CountPositiveOddIndices.eval(&[-1, 2, 3, -4]), Some(1));
         assert_eq!(KClosed::SumAbsLeK.eval(&[-5, 2, 4], 2), Some(7));
+        assert_eq!(IndexScan::CountNegativeEvenIndices.eval(&[-1, 2, 3, -4]), Some(1));
+        assert_eq!(IndexScan::CountNegativeOddIndices.eval(&[-1, 2, 3, -4]), Some(1));
+        assert_eq!(KClosed::CountAbsEqK.eval(&[-5, 2, 5, 4], 5), Some(2));
     }
 }
