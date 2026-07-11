@@ -783,6 +783,12 @@ enum DualAccum {
     ProductPositives,
     /// Truncating mean of absolute values: `abs_sum / len`.
     MeanAbsTrunc,
+    /// First strictly-positive element (none → 0).
+    FirstPositive,
+    /// Last strictly-positive element (none → 0).
+    LastPositive,
+    /// First strictly-negative element (none → 0).
+    FirstNegative,
 }
 
 impl DualAccum {
@@ -827,6 +833,9 @@ impl DualAccum {
             DualAccum::AlternatingSum => "alternating_sum",
             DualAccum::ProductPositives => "product_positives",
             DualAccum::MeanAbsTrunc => "mean_abs_trunc",
+            DualAccum::FirstPositive => "first_positive",
+            DualAccum::LastPositive => "last_positive",
+            DualAccum::FirstNegative => "first_negative",
         }
     }
 
@@ -858,7 +867,10 @@ impl DualAccum {
                 | DualAccum::MaxNegative
                 | DualAccum::SumEvenValues
                 | DualAccum::SumOddValues
-                | DualAccum::AlternatingSum => Some(0),
+                | DualAccum::AlternatingSum
+                | DualAccum::FirstPositive
+                | DualAccum::LastPositive
+                | DualAccum::FirstNegative => Some(0),
                 DualAccum::ProductPositives => Some(1),
                 DualAccum::MeanAbsTrunc | DualAccum::MeanTrunc => None,
                 _ => None,
@@ -1146,6 +1158,30 @@ impl DualAccum {
                     .map(|x| x.abs())
                     .fold(0i64, i64::saturating_add);
                 Some(sum / (arr.len() as i64))
+            }
+            DualAccum::FirstPositive => {
+                for &x in arr {
+                    if x > 0 {
+                        return Some(x);
+                    }
+                }
+                Some(0)
+            }
+            DualAccum::LastPositive => {
+                for &x in arr.iter().rev() {
+                    if x > 0 {
+                        return Some(x);
+                    }
+                }
+                Some(0)
+            }
+            DualAccum::FirstNegative => {
+                for &x in arr {
+                    if x < 0 {
+                        return Some(x);
+                    }
+                }
+                Some(0)
             }
         }
     }
@@ -1607,6 +1643,32 @@ impl DualAccum {
         }}\n\
     }}\n\
     return total / arr.len;\n\
+}}\n"
+            ),
+            DualAccum::FirstPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item > 0 {{ return item; }}\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::LastPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = arr.len - 1;\n\
+    while i >= 0 {{\n\
+        if arr[i] > 0 {{ return arr[i]; }}\n\
+        i = i - 1;\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::FirstNegative => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item < 0 {{ return item; }}\n\
+    }}\n\
+    return 0;\n\
 }}\n"
             ),
         }
@@ -2232,6 +2294,9 @@ fn try_dual_and_pairwise(
         DualAccum::AlternatingSum,
         DualAccum::ProductPositives,
         DualAccum::MeanAbsTrunc,
+        DualAccum::FirstPositive,
+        DualAccum::LastPositive,
+        DualAccum::FirstNegative,
     ] {
         let ok = inputs
             .iter()
@@ -4035,5 +4100,9 @@ mod tests {
         assert_eq!(DualAccum::MeanAbsTrunc.eval(&[-2, 4, -6]), Some(4));
         assert_eq!(PairwiseScan::SumIncreases.eval(&[1, 5, 2, 9]), Some(11));
         assert_eq!(PairwiseScan::SumDecreases.eval(&[9, 2, 8, 1]), Some(14));
+        assert_eq!(DualAccum::FirstPositive.eval(&[-2, 0, 5, 3]), Some(5));
+        assert_eq!(DualAccum::LastPositive.eval(&[-2, 0, 5, 3]), Some(3));
+        assert_eq!(DualAccum::FirstNegative.eval(&[2, -4, -1]), Some(-4));
+        assert_eq!(DualAccum::FirstPositive.eval(&[-1, 0]), Some(0));
     }
 }

@@ -347,6 +347,21 @@ fn dual_mean_abs_trunc(arr: &[i64]) -> Option<i64> {
     Some(arr.iter().map(|&x| x.abs()).sum::<i64>() / (arr.len() as i64))
 }
 
+fn dual_first_positive(arr: &[i64]) -> i64 {
+    for &x in arr { if x > 0 { return x; } }
+    0
+}
+
+fn dual_last_positive(arr: &[i64]) -> i64 {
+    for &x in arr.iter().rev() { if x > 0 { return x; } }
+    0
+}
+
+fn dual_first_negative(arr: &[i64]) -> i64 {
+    for &x in arr { if x < 0 { return x; } }
+    0
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -814,6 +829,9 @@ mod tests {
         assert_eq!(dual_alternating_sum(&[10, 3, 2, 1]), 8);
         assert_eq!(dual_product_positives(&[-1, 2, 3, 0]), 6);
         assert_eq!(dual_mean_abs_trunc(&[-2, 4, -6]), Some(4));
+        assert_eq!(dual_first_positive(&[-2, 0, 5, 3]), 5);
+        assert_eq!(dual_last_positive(&[-2, 0, 5, 3]), 3);
+        assert_eq!(dual_first_negative(&[2, -4, -1]), -4);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
