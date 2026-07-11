@@ -606,6 +606,34 @@ fn index_second_last(arr: &[i64]) -> Option<i64> {
     Some(arr[arr.len() - 2])
 }
 
+fn index_max_even(arr: &[i64]) -> Option<i64> {
+    let mut best = None;
+    for (i, &v) in arr.iter().enumerate() {
+        if i % 2 == 0 {
+            best = Some(match best { Some(b) if b >= v => b, _ => v });
+        }
+    }
+    best
+}
+
+fn index_min_odd(arr: &[i64]) -> Option<i64> {
+    let mut best = None;
+    for (i, &v) in arr.iter().enumerate() {
+        if i % 2 == 1 {
+            best = Some(match best { Some(b) if b <= v => b, _ => v });
+        }
+    }
+    best
+}
+
+fn k_count_eq(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v == k).count() as i64
+}
+
+fn k_sum_gt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v > k).copied().sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,6 +787,10 @@ mod tests {
         assert_eq!(index_middle(&[1, 2, 3]), Some(2));
         assert_eq!(index_second(&[10, 20, 30]), Some(20));
         assert_eq!(index_second_last(&[10, 20, 30]), Some(20));
+        assert_eq!(index_max_even(&[1, 9, 3, 8, 2]), Some(3));
+        assert_eq!(index_min_odd(&[1, 9, 3, 2]), Some(2));
+        assert_eq!(k_count_eq(&[1, 5, 5, 2], 5), 2);
+        assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -877,6 +909,17 @@ fn sort_by_len(s: &str, sep: &str) -> String {
     owned.join(sep)
 }
 
+fn take_first_two(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    let n = words.len().min(2);
+    words[..n].join(sep)
+}
+
+fn drop_first_two(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 2 { String::new() } else { words[2..].join(sep) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,6 +942,8 @@ mod tests {
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
+        assert_eq!(take_first_two("one two three four", " "), "one two");
+        assert_eq!(drop_first_two("one two three four", " "), "three four");
     }
 }
 EOF

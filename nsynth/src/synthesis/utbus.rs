@@ -2228,6 +2228,10 @@ fn try_dual_and_pairwise(
         IndexScan::Middle,
         IndexScan::Second,
         IndexScan::SecondLast,
+        IndexScan::MaxEvenIndices,
+        IndexScan::MinEvenIndices,
+        IndexScan::MaxOddIndices,
+        IndexScan::MinOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -2281,6 +2285,14 @@ enum IndexScan {
     Second,
     /// Second-to-last element (len < 2 → None).
     SecondLast,
+    /// Max among even-index elements (empty → None).
+    MaxEvenIndices,
+    /// Min among even-index elements (empty → None).
+    MinEvenIndices,
+    /// Max among odd-index elements (no odd indices → None).
+    MaxOddIndices,
+    /// Min among odd-index elements (no odd indices → None).
+    MinOddIndices,
 }
 
 impl IndexScan {
@@ -2301,6 +2313,10 @@ impl IndexScan {
             IndexScan::Middle => "middle",
             IndexScan::Second => "second",
             IndexScan::SecondLast => "second_last",
+            IndexScan::MaxEvenIndices => "max_even_indices",
+            IndexScan::MinEvenIndices => "min_even_indices",
+            IndexScan::MaxOddIndices => "max_odd_indices",
+            IndexScan::MinOddIndices => "min_odd_indices",
         }
     }
 
@@ -2448,6 +2464,54 @@ impl IndexScan {
                 } else {
                     Some(arr[arr.len() - 2])
                 }
+            }
+            IndexScan::MaxEvenIndices => {
+                let mut best: Option<i64> = None;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 0 {
+                        best = Some(match best {
+                            Some(b) if b >= v => b,
+                            _ => v,
+                        });
+                    }
+                }
+                best
+            }
+            IndexScan::MinEvenIndices => {
+                let mut best: Option<i64> = None;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 0 {
+                        best = Some(match best {
+                            Some(b) if b <= v => b,
+                            _ => v,
+                        });
+                    }
+                }
+                best
+            }
+            IndexScan::MaxOddIndices => {
+                let mut best: Option<i64> = None;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 1 {
+                        best = Some(match best {
+                            Some(b) if b >= v => b,
+                            _ => v,
+                        });
+                    }
+                }
+                best
+            }
+            IndexScan::MinOddIndices => {
+                let mut best: Option<i64> = None;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 1 {
+                        best = Some(match best {
+                            Some(b) if b <= v => b,
+                            _ => v,
+                        });
+                    }
+                }
+                best
             }
         }
     }
@@ -2623,6 +2687,50 @@ impl IndexScan {
     return arr[arr.len - 2];\n\
 }}\n"
             ),
+            IndexScan::MaxEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = arr[0];\n\
+    i: i64 = 2;\n\
+    while i < arr.len {{\n\
+        if arr[i] > best {{ best = arr[i]; }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            IndexScan::MinEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = arr[0];\n\
+    i: i64 = 2;\n\
+    while i < arr.len {{\n\
+        if arr[i] < best {{ best = arr[i]; }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            IndexScan::MaxOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = arr[1];\n\
+    i: i64 = 3;\n\
+    while i < arr.len {{\n\
+        if arr[i] > best {{ best = arr[i]; }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            IndexScan::MinOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = arr[1];\n\
+    i: i64 = 3;\n\
+    while i < arr.len {{\n\
+        if arr[i] < best {{ best = arr[i]; }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2642,6 +2750,10 @@ enum KClosed {
     KthFromEnd,
     /// 0-indexed element at `k` (out of bounds → None).
     ElementAt,
+    /// Count of elements equal to `k`.
+    CountEqK,
+    /// Sum of elements greater than `k`.
+    SumGtK,
 }
 
 impl KClosed {
@@ -2653,6 +2765,8 @@ impl KClosed {
             KClosed::LastIndexOf => "last_index_of",
             KClosed::KthFromEnd => "kth_from_end",
             KClosed::ElementAt => "element_at",
+            KClosed::CountEqK => "count_eq_k",
+            KClosed::SumGtK => "sum_gt_k",
         }
     }
 
@@ -2702,6 +2816,13 @@ impl KClosed {
                 }
                 Some(arr[k as usize])
             }
+            KClosed::CountEqK => Some(arr.iter().filter(|&&v| v == k).count() as i64),
+            KClosed::SumGtK => Some(
+                arr.iter()
+                    .filter(|&&v| v > k)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -2753,6 +2874,28 @@ impl KClosed {
     return arr[k];\n\
 }}\n"
             ),
+            KClosed::CountEqK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item == k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            KClosed::SumGtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > k {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2771,6 +2914,8 @@ fn try_k_closed(
         KClosed::LastIndexOf,
         KClosed::KthFromEnd,
         KClosed::ElementAt,
+        KClosed::CountEqK,
+        KClosed::SumGtK,
     ] {
         let ok = inputs
             .iter()
@@ -3764,5 +3909,11 @@ mod tests {
             PairwiseScan::LongestNonIncreasingRun.eval(&[5, 4, 4, 1, 9, 8]),
             Some(4)
         );
+        assert_eq!(IndexScan::MaxEvenIndices.eval(&[1, 9, 3, 8, 2]), Some(3));
+        assert_eq!(IndexScan::MinEvenIndices.eval(&[5, 9, 1, 8]), Some(1));
+        assert_eq!(IndexScan::MaxOddIndices.eval(&[1, 9, 3, 8]), Some(9));
+        assert_eq!(IndexScan::MinOddIndices.eval(&[1, 9, 3, 2]), Some(2));
+        assert_eq!(KClosed::CountEqK.eval(&[1, 5, 5, 2], 5), Some(2));
+        assert_eq!(KClosed::SumGtK.eval(&[1, 5, 3, 2], 2), Some(8));
     }
 }
