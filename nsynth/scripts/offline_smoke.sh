@@ -162,6 +162,17 @@ fn dual_stock_profit(arr: &[i64]) -> Option<i64> {
     Some(best)
 }
 
+fn dual_prefix_max_sum(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut running_max = arr[0];
+    let mut total = 0i64;
+    for &x in arr {
+        if x > running_max { running_max = x; }
+        total += running_max;
+    }
+    Some(total)
+}
+
 fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut best = 1i64;
@@ -284,6 +295,7 @@ mod tests {
         assert_eq!(dual_second_max(&[5, 10, 8]), Some(8));
         assert_eq!(dual_stock_profit(&[7, 1, 5, 3, 6, 4]), Some(5));
         assert_eq!(dual_stock_profit(&[7, 6, 4, 3, 1]), Some(0));
+        assert_eq!(dual_prefix_max_sum(&[1, 3, 2, 5]), Some(12));
         assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 

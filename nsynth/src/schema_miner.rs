@@ -365,6 +365,127 @@ pub fn append_harvest_row(task: &str, code: &str) {
     }
 }
 
+/// One row in the parallel Rust learned store (`NSYNTH_RUST_LEARNED` JSONL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustLearnedRow {
+    pub name: String,
+    #[serde(default)]
+    pub task: String,
+    pub code: String,
+}
+
+/// Path for the Rust-body learned store (no Mog transpile required).
+/// Prefers `NSYNTH_RUST_LEARNED`; else `.nsynth/rust_learned.jsonl`.
+pub fn rust_learned_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("NSYNTH_RUST_LEARNED") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    // Default on when harvest flywheel is active, else still allow cwd default
+    // only if the file already exists (don't create spuriously).
+    let default = PathBuf::from(".nsynth/rust_learned.jsonl");
+    if default.is_file() || std::env::var_os("NSYNTH_HARVEST").is_some() {
+        Some(default)
+    } else {
+        None
+    }
+}
+
+/// Append a verified Rust entry-fn body to the parallel learned store.
+/// Best-effort; no-op when no path resolves. Strips test modules via
+/// [`extract_entry_fn_body`].
+pub fn append_rust_learned(name: &str, task: &str, code: &str) {
+    let Some(path) = rust_learned_path() else {
+        return;
+    };
+    if name.is_empty() || code.trim().is_empty() {
+        return;
+    }
+    let body = if code.contains("fn ") || code.contains("pub fn ") {
+        extract_entry_fn_body(code)
+    } else {
+        code.trim().to_string()
+    };
+    if body.is_empty() {
+        return;
+    }
+    let row = RustLearnedRow {
+        name: name.to_string(),
+        task: task.chars().take(200).collect(),
+        code: body,
+    };
+    let Ok(line) = serde_json::to_string(&row) else {
+        return;
+    };
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Load all Rust learned rows (skips blank / malformed lines).
+pub fn load_rust_learned(path: &Path) -> Vec<RustLearnedRow> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(r) = serde_json::from_str::<RustLearnedRow>(line) {
+            if !r.code.trim().is_empty() {
+                rows.push(r);
+            }
+        }
+    }
+    rows
+}
+
+/// Most recent learned Rust body for `name` (case-insensitive), if any.
+pub fn find_rust_learned_by_name(name: &str) -> Option<String> {
+    let path = rust_learned_path()?;
+    if !path.is_file() {
+        return None;
+    }
+    let want = name.to_ascii_lowercase();
+    load_rust_learned(&path)
+        .into_iter()
+        .rev()
+        .find(|r| r.name.to_ascii_lowercase() == want)
+        .map(|r| r.code)
+}
+
+/// Write a learned entry-fn body into `root/src/lib.rs`, preserving any
+/// `#[cfg(test)]` module that follows. Best-effort recall before hole-fill.
+pub fn apply_rust_learned_to_lib(root: &Path, body: &str) -> Result<(), String> {
+    let lib_path = root.join("src/lib.rs");
+    let existing = std::fs::read_to_string(&lib_path).unwrap_or_default();
+    let tests = existing
+        .find("#[cfg(test)]")
+        .map(|i| existing[i..].to_string())
+        .unwrap_or_default();
+    let mut out = body.trim().to_string();
+    out.push('\n');
+    if !tests.is_empty() {
+        out.push('\n');
+        out.push_str(&tests);
+    }
+    if let Some(parent) = lib_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&lib_path, out).map_err(|e| format!("write {}: {e}", lib_path.display()))
+}
+
 /// Path where auto-mined / CLI-mined templates are written and later loaded.
 /// Prefers `NSYNTH_MINED_TEMPLATES`; else `.nsynth/mined_templates.json` (cwd).
 pub fn mined_templates_out_path() -> PathBuf {
@@ -844,6 +965,45 @@ mod characterization {
         std::env::remove_var("NSYNTH_AUTO_MINE");
         let _ = std::fs::remove_file(&harvest);
         let _ = std::fs::remove_file(&templates);
+    }
+
+    #[test]
+    fn rust_learned_store_round_trip() {
+        let _guard = harvest_env_lock();
+        let id = std::process::id();
+        let path = std::env::temp_dir().join(format!("nsynth_rust_learned_{id}.jsonl"));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("NSYNTH_RUST_LEARNED", &path);
+        append_rust_learned(
+            "double",
+            "double a number",
+            "pub fn double(a0: i64) -> i64 { a0 * 2 }\n\n#[cfg(test)]\nmod t { }",
+        );
+        append_rust_learned("triple", "triple", "fn triple(x: i64) -> i64 { x * 3 }");
+        let rows = load_rust_learned(&path);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].code.contains("fn double"), "{}", rows[0].code);
+        assert!(!rows[0].code.contains("cfg(test)"));
+        assert_eq!(
+            find_rust_learned_by_name("DOUBLE").as_deref().map(|s| s.contains("a0 * 2")),
+            Some(true)
+        );
+        let tmp_crate = std::env::temp_dir().join(format!("nsynth_rust_apply_{id}"));
+        let _ = std::fs::remove_dir_all(&tmp_crate);
+        std::fs::create_dir_all(tmp_crate.join("src")).unwrap();
+        std::fs::write(
+            tmp_crate.join("src/lib.rs"),
+            "fn double(x: i64) -> i64 { 0 }\n\n#[cfg(test)]\nmod t { fn x() {} }\n",
+        )
+        .unwrap();
+        let body = find_rust_learned_by_name("double").unwrap();
+        apply_rust_learned_to_lib(&tmp_crate, &body).unwrap();
+        let lib = std::fs::read_to_string(tmp_crate.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("a0 * 2"), "{lib}");
+        assert!(lib.contains("#[cfg(test)]"), "{lib}");
+        std::env::remove_var("NSYNTH_RUST_LEARNED");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&tmp_crate);
     }
 
     fn harvest_env_lock() -> std::sync::MutexGuard<'static, ()> {

@@ -201,6 +201,8 @@ enum ElemPred {
     Even,
     Odd,
     NonZero,
+    /// `item == 0`.
+    Zero,
     /// `item > k` (needs the optional scalar arg).
     GtK,
     /// `item < k`.
@@ -236,6 +238,7 @@ impl ElemPred {
             ElemPred::Even => item % 2 == 0,
             ElemPred::Odd => item % 2 != 0,
             ElemPred::NonZero => item != 0,
+            ElemPred::Zero => item == 0,
             ElemPred::GtK => k.map(|k| item > k).unwrap_or(false),
             ElemPred::LtK => k.map(|k| item < k).unwrap_or(false),
             ElemPred::EqK => k.map(|k| item == k).unwrap_or(false),
@@ -255,6 +258,7 @@ impl ElemPred {
             ElemPred::Even => Some(format!("{var} % 2 == 0")),
             ElemPred::Odd => Some(format!("{var} % 2 != 0")),
             ElemPred::NonZero => Some(format!("{var} != 0")),
+            ElemPred::Zero => Some(format!("{var} == 0")),
             ElemPred::GtK => Some(format!("{var} > k")),
             ElemPred::LtK => Some(format!("{var} < k")),
             ElemPred::EqK => Some(format!("{var} == k")),
@@ -555,6 +559,7 @@ fn enumerate_array_programs(include_k_preds: bool) -> Vec<ArrayProgram> {
         ElemPred::Even,
         ElemPred::Odd,
         ElemPred::NonZero,
+        ElemPred::Zero,
     ];
     let preds_k = [
         ElemPred::GtK,
@@ -637,6 +642,8 @@ enum DualAccum {
     SecondMax,
     /// One-buy one-sell max profit (0 if none).
     StockProfit,
+    /// Sum of running maxima: for each prefix, add max so far.
+    PrefixMaxSum,
 }
 
 impl DualAccum {
@@ -645,6 +652,7 @@ impl DualAccum {
             DualAccum::Range => "range",
             DualAccum::SecondMax => "second_max",
             DualAccum::StockProfit => "stock_profit",
+            DualAccum::PrefixMaxSum => "prefix_max_sum",
         }
     }
 
@@ -694,6 +702,17 @@ impl DualAccum {
                 }
                 Some(best)
             }
+            DualAccum::PrefixMaxSum => {
+                let mut running_max = arr[0];
+                let mut total = 0i64;
+                for &x in arr {
+                    if x > running_max {
+                        running_max = x;
+                    }
+                    total = total.saturating_add(running_max);
+                }
+                Some(total)
+            }
         }
     }
 
@@ -741,6 +760,17 @@ impl DualAccum {
         if profit > best {{ best = profit; }}\n\
     }}\n\
     return best;\n\
+}}\n"
+            ),
+            DualAccum::PrefixMaxSum => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    running_max: i64 = arr[0];\n\
+    total: i64 = 0;\n\
+    for x in arr {{\n\
+        if x > running_max {{ running_max = x; }}\n\
+        total = total + running_max;\n\
+    }}\n\
+    return total;\n\
 }}\n"
             ),
         }
@@ -949,7 +979,12 @@ fn try_dual_and_pairwise(
     inputs: &[Vec<i64>],
     expected: &[i64],
 ) -> Option<SolveResult> {
-    for dual in [DualAccum::Range, DualAccum::SecondMax, DualAccum::StockProfit] {
+    for dual in [
+        DualAccum::Range,
+        DualAccum::SecondMax,
+        DualAccum::StockProfit,
+        DualAccum::PrefixMaxSum,
+    ] {
         let ok = inputs
             .iter()
             .zip(expected.iter())
@@ -1674,5 +1709,29 @@ mod tests {
             |arr| PairwiseScan::NonDecreasing.eval(arr).unwrap_or(0),
         );
         assert_solves(&problem, "non_decreasing");
+    }
+
+    #[test]
+    fn utbus_solves_prefix_max_sum() {
+        let problem = array_problem(
+            "prefix_max_sum",
+            "fn prefix_max_sum(arr: [i64]) -> i64",
+            &[&[1, 3, 2, 5], &[5, 4, 3], &[1, 1, 1], &[2, 5, 3, 8]],
+            &[&[3, 1, 4, 2], &[7]],
+            |arr| DualAccum::PrefixMaxSum.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "prefix_max_sum");
+    }
+
+    #[test]
+    fn utbus_solves_count_zeros() {
+        let problem = array_problem(
+            "count_zeros",
+            "fn count_zeros(arr: [i64]) -> i64",
+            &[&[0, 1, 0, 2], &[1, 2, 3], &[0, 0, 0], &[5, 0]],
+            &[&[0, 1, 0], &[7, 8]],
+            |arr| arr.iter().filter(|&&x| x == 0).count() as i64,
+        );
+        assert_solves(&problem, "count");
     }
 }

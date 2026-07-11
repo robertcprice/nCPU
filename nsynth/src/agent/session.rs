@@ -1799,24 +1799,14 @@ impl CodingAgentSession {
             "whole_software.phases".into(),
             plan.phases.join(" → "),
         ));
-        // WP5: after a successful schema (or other) fill, promote best-effort.
+        // WP5 + Phase-4 flywheel: promote, harvest, optional Mog distill.
         if result.success {
-            let lib_path = self.root.join("src/lib.rs");
-            if let Ok(lib) = std::fs::read_to_string(&lib_path) {
-                let name = if !scaffolded.component_name.is_empty() {
-                    scaffolded.component_name.clone()
-                } else {
-                    "whole_software_component".into()
-                };
-                let surfaces = vec![name.clone(), query.chars().take(48).collect()];
-                let _ = crate::component::promote_schema_component(
-                    &self.root,
-                    &name,
-                    &surfaces,
-                    &lib,
-                );
-                crate::schema_miner::append_harvest_row(query, &lib);
-            }
+            let name = if !scaffolded.component_name.is_empty() {
+                scaffolded.component_name.clone()
+            } else {
+                "whole_software_component".into()
+            };
+            self.post_success_flywheel(query, &name, &mut result, None);
         }
         Some(result)
     }
@@ -1844,6 +1834,11 @@ impl CodingAgentSession {
             examples,
         )
         .ok()?;
+        // Recall: if a prior Rust-lane win for this fn name exists, install it
+        // before the hole-filler (cargo still gates — wrong recall just fails tests).
+        if let Some(prior) = crate::schema_miner::find_rust_learned_by_name(&fn_name) {
+            let _ = crate::schema_miner::apply_rust_learned_to_lib(&self.root, &prior);
+        }
         let scaffolded = crate::whole_software::ScaffoldedCrate {
             root: self.root.clone(),
             kind: crate::whole_software::ScaffoldKind::Characterization,
@@ -1868,23 +1863,49 @@ impl CodingAgentSession {
             return None;
         }
         result.synthesis_method = Some("whole-software:example-rust-lane".into());
-        // Phase-4 flywheel: promote + harvest the verified Rust body.
+        // Phase-4 flywheel: promote + harvest + optional Mog distill.
+        self.post_success_flywheel(query, &fn_name, &mut result, Some(examples));
+        Some(result)
+    }
+
+    /// Shared Phase-4 flywheel after a cargo-verified whole-software / Rust-lane
+    /// fill: promote component, append harvest (auto-mines templates), and when
+    /// examples are available attempt Mog `record_proposed_op` distill.
+    fn post_success_flywheel(
+        &self,
+        query: &str,
+        component_name: &str,
+        result: &mut AgentQueryResult,
+        examples: Option<&[crate::benchmark::Example]>,
+    ) {
         let lib_path = self.root.join("src/lib.rs");
         if let Ok(lib) = std::fs::read_to_string(&lib_path) {
-            let surfaces = vec![fn_name.clone(), query.chars().take(48).collect()];
+            let surfaces = vec![
+                component_name.to_string(),
+                query.chars().take(48).collect(),
+            ];
             let _ = crate::component::promote_schema_component(
                 &self.root,
-                &fn_name,
+                component_name,
                 &surfaces,
                 &lib,
             );
             crate::schema_miner::append_harvest_row(query, &lib);
+            // Parallel Rust learned store (no Mog transpile required).
+            crate::schema_miner::append_rust_learned(component_name, query, &lib);
         }
-        // Partial Mog distill: when the same examples are re-solvable by the
-        // Mog engine, record_proposed_op so future model-free runs absorb the
-        // skill. Novel Rust-only algorithms are skipped (Rust ≠ Mog).
-        self.maybe_distill_rust_lane_to_mog(&fn_name, examples, &mut result);
-        Some(result)
+        let exs: Vec<crate::benchmark::Example> = match examples {
+            Some(e) if e.len() >= 2 => e.to_vec(),
+            _ => {
+                // Best-effort: parse inline examples from the query for schema
+                // fills that still carried I/O in the prose.
+                let (_, parsed) = crate::verified_nl_router::split_prompt_examples(query);
+                parsed
+            }
+        };
+        if exs.len() >= 2 {
+            self.maybe_distill_rust_lane_to_mog(component_name, &exs, result);
+        }
     }
 
     /// Best-effort Mog re-synthesis + `record_proposed_op` after a Rust-lane win.
