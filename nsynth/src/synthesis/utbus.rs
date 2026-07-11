@@ -727,6 +727,8 @@ enum DualAccum {
     GcdAll,
     /// LCM of all elements (abs; empty → None; overflow → None).
     LcmAll,
+    /// Truncating mean: `sum / len` (empty → None).
+    MeanTrunc,
 }
 
 impl DualAccum {
@@ -743,6 +745,7 @@ impl DualAccum {
             DualAccum::Median => "median",
             DualAccum::GcdAll => "gcd_all",
             DualAccum::LcmAll => "lcm_all",
+            DualAccum::MeanTrunc => "mean_trunc",
         }
     }
 
@@ -878,6 +881,10 @@ impl DualAccum {
                     l = i64_lcm(l, x)?;
                 }
                 Some(l)
+            }
+            DualAccum::MeanTrunc => {
+                let sum = arr.iter().copied().fold(0i64, i64::saturating_add);
+                Some(sum / (arr.len() as i64))
             }
         }
     }
@@ -1044,6 +1051,15 @@ impl DualAccum {
         i = i + 1;\n\
     }}\n\
     return l;\n\
+}}\n"
+            ),
+            DualAccum::MeanTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        total = total + item;\n\
+    }}\n\
+    return total / arr.len;\n\
 }}\n"
             ),
         }
@@ -1442,6 +1458,7 @@ fn try_dual_and_pairwise(
         DualAccum::Median,
         DualAccum::GcdAll,
         DualAccum::LcmAll,
+        DualAccum::MeanTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -2913,5 +2930,7 @@ mod tests {
         assert_eq!(DualAccum::GcdAll.eval(&[7, 14, 21]), Some(7));
         assert_eq!(DualAccum::LcmAll.eval(&[2, 3, 4]), Some(12));
         assert_eq!(DualAccum::LcmAll.eval(&[6, 9]), Some(18));
+        assert_eq!(DualAccum::MeanTrunc.eval(&[1, 2, 3]), Some(2));
+        assert_eq!(DualAccum::MeanTrunc.eval(&[10, 20, 30, 40]), Some(25));
     }
 }

@@ -230,6 +230,11 @@ fn dual_lcm_all(arr: &[i64]) -> Option<i64> {
     Some(l)
 }
 
+fn dual_mean_trunc(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    Some(arr.iter().sum::<i64>() / (arr.len() as i64))
+}
+
 fn dual_second_min(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut first = arr[0];
@@ -532,6 +537,8 @@ mod tests {
         assert_eq!(dual_median(&[10, 1, 5, 0]), Some(5));
         assert_eq!(dual_gcd_all(&[12, 18, 30]), Some(6));
         assert_eq!(dual_lcm_all(&[2, 3, 4]), Some(12));
+        assert_eq!(dual_mean_trunc(&[1, 2, 3]), Some(2));
+        assert_eq!(dual_mean_trunc(&[10, 20, 30, 40]), Some(25));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
