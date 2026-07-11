@@ -733,6 +733,8 @@ enum DualAccum {
     SumSquares,
     /// Sum of absolute values.
     AbsSum,
+    /// Maximum absolute value.
+    MaxAbs,
 }
 
 impl DualAccum {
@@ -752,6 +754,7 @@ impl DualAccum {
             DualAccum::MeanTrunc => "mean_trunc",
             DualAccum::SumSquares => "sum_squares",
             DualAccum::AbsSum => "abs_sum",
+            DualAccum::MaxAbs => "max_abs",
         }
     }
 
@@ -904,6 +907,7 @@ impl DualAccum {
                     .map(|x| x.abs())
                     .fold(0i64, i64::saturating_add),
             ),
+            DualAccum::MaxAbs => Some(arr.iter().copied().map(|x| x.abs()).max().unwrap_or(0)),
         }
     }
 
@@ -1098,6 +1102,21 @@ impl DualAccum {
         total = total + v;\n\
     }}\n\
     return total;\n\
+}}\n"
+            ),
+            DualAccum::MaxAbs => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 0; }}\n\
+    best: i64 = arr[0];\n\
+    if best < 0 {{ best = 0 - best; }}\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        v: i64 = arr[i];\n\
+        if v < 0 {{ v = 0 - v; }}\n\
+        if v > best {{ best = v; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
 }}\n"
             ),
         }
@@ -1499,6 +1518,7 @@ fn try_dual_and_pairwise(
         DualAccum::MeanTrunc,
         DualAccum::SumSquares,
         DualAccum::AbsSum,
+        DualAccum::MaxAbs,
     ] {
         let ok = inputs
             .iter()
@@ -2993,5 +3013,7 @@ mod tests {
         assert_eq!(DualAccum::SumSquares.eval(&[-2, 3]), Some(13));
         assert_eq!(DualAccum::AbsSum.eval(&[-1, 2, -3]), Some(6));
         assert_eq!(DualAccum::AbsSum.eval(&[5, 0, -2]), Some(7));
+        assert_eq!(DualAccum::MaxAbs.eval(&[-1, 2, -5]), Some(5));
+        assert_eq!(DualAccum::MaxAbs.eval(&[3, -2]), Some(3));
     }
 }
