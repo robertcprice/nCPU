@@ -914,6 +914,8 @@ enum WordShape {
     JoinWithBangQuestion,
     /// Join words with "@!".
     JoinWithAtBang,
+    /// Join words with "$!".
+    JoinWithDollarBang,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1072,6 +1074,7 @@ impl WordShape {
             WordShape::JoinWithQuestionBang => "join_with_question_bang",
             WordShape::JoinWithBangQuestion => "join_with_bang_question",
             WordShape::JoinWithAtBang => "join_with_at_bang",
+            WordShape::JoinWithDollarBang => "join_with_dollar_bang",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1548,6 +1551,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithQuestionBang => words.join("?!"),
         WordShape::JoinWithBangQuestion => words.join("!?"),
         WordShape::JoinWithAtBang => words.join("@!"),
+        WordShape::JoinWithDollarBang => words.join("$!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -2014,6 +2018,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithAtBang => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"@!\");\n}}\n"
         ),
+        WordShape::JoinWithDollarBang => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"$!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -2194,6 +2201,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithQuestionBang,
         WordShape::JoinWithBangQuestion,
         WordShape::JoinWithAtBang,
+        WordShape::JoinWithDollarBang,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -5969,6 +5977,40 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-non_hex_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Non-octal character count (not 0-7).
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| !c.is_digit(8)).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        is_oct: i64 = 0;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"7\" {{\n\
+                is_oct = 1;\n\
+            }}\n\
+        }}\n\
+        if is_oct == 0 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-non_oct_count".to_string(),
                 error: None,
             });
         }
