@@ -397,6 +397,53 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         ));
                         fresh.push(Expr { outs, mog: format!("sortw_{k_name}({})", e.mog), helpers, depth });
                     }
+                    // FILTER the word list by even/odd character length — unlocks
+                    // split→filter→join compositions (C1 filter-words in the enum).
+                    for (tag, keep_even) in [("even", true), ("odd", false)] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                V::L(
+                                    l.iter()
+                                        .filter(|w| {
+                                            let n = w.chars().count();
+                                            if keep_even {
+                                                n % 2 == 0
+                                            } else {
+                                                n % 2 != 0
+                                            }
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        let cond = if keep_even {
+                            "w.len % 2 == 0"
+                        } else {
+                            "w.len % 2 != 0"
+                        };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn filterw_{tag}(ws: [string]) -> [string] {{\n\
+    out: [string] = [];\n\
+    for w in ws {{\n\
+        if {cond} {{\n\
+            out.push(w);\n\
+        }}\n\
+    }}\n\
+    return out;\n\
+}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("filterw_{tag}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
                     // join with " " -> Str.
                     let outs: Vec<V> = e
                         .outs

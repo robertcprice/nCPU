@@ -1287,14 +1287,27 @@ pub fn synthesize_string_int_program(
             });
         }
     }
-    // Word count: s.split(sep).len. Require some example to actually split into >1
-    // segment (else it's the constant 1 or coincides with something trivial).
+    // Word count: nonempty segments after split. Prefer trim-aware counting so
+    // `"  two words  "` → 2 (naive `.split(" ").count()` would be 4).
     for sep in [" ", "-", "_", ",", "/"] {
-        let matches = examples.iter().all(|(s, o)| s.split(sep).count() as i64 == *o);
-        let nontrivial = examples.iter().any(|(s, _)| s.split(sep).count() >= 2);
+        let matches = examples
+            .iter()
+            .all(|(s, o)| nonempty_split_count(s, sep) == *o);
+        let nontrivial = examples
+            .iter()
+            .any(|(s, _)| nonempty_split_count(s, sep) >= 2);
         if matches && nontrivial {
             let code = format!(
-                "fn transform({p}: string) -> i64 {{\n    return {p}.split(\"{}\").len;\n}}\n",
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    n: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            n = n + 1;\n\
+        }}\n\
+    }}\n\
+    return n;\n\
+}}\n",
                 esc(sep)
             );
             if verify_str_int(&code, examples) {
@@ -1308,6 +1321,11 @@ pub fn synthesize_string_int_program(
         }
     }
     None
+}
+
+/// Count nonempty segments after splitting `s` on `sep` (trim-aware word count).
+fn nonempty_split_count(s: &str, sep: &str) -> i64 {
+    s.split(sep).filter(|p| !p.is_empty()).count() as i64
 }
 
 #[cfg(test)]
@@ -1733,6 +1751,14 @@ mod tests {
             &[("hello world".into(), 2), ("one two three".into(), 3), ("a".into(), 1)],
         );
         assert_eq!(r.map(|r| r.method), Some("str-word_count".to_string()));
+    }
+
+    #[test]
+    fn nonempty_split_count_skips_padding() {
+        assert_eq!(nonempty_split_count("  two words  ", " "), 2);
+        assert_eq!(nonempty_split_count("hello world", " "), 2);
+        assert_eq!(nonempty_split_count("a--b--c", "-"), 3);
+        assert_eq!(nonempty_split_count("single", " "), 1);
     }
 
     #[test]
