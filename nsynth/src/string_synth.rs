@@ -928,6 +928,8 @@ enum WordShape {
     JoinWithPercentBang,
     /// Join words with "&!".
     JoinWithAmpBang,
+    /// Join words with "=!".
+    JoinWithEqBang,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1093,6 +1095,7 @@ impl WordShape {
             WordShape::JoinWithStarBang => "join_with_star_bang",
             WordShape::JoinWithPercentBang => "join_with_percent_bang",
             WordShape::JoinWithAmpBang => "join_with_amp_bang",
+            WordShape::JoinWithEqBang => "join_with_eq_bang",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1576,6 +1579,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithStarBang => words.join("*!"),
         WordShape::JoinWithPercentBang => words.join("%!"),
         WordShape::JoinWithAmpBang => words.join("&!"),
+        WordShape::JoinWithEqBang => words.join("=!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -2063,6 +2067,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithAmpBang => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"&!\");\n}}\n"
         ),
+        WordShape::JoinWithEqBang => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"=!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -2250,6 +2257,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithStarBang,
         WordShape::JoinWithPercentBang,
         WordShape::JoinWithAmpBang,
+        WordShape::JoinWithEqBang,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -6315,6 +6323,40 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-non_upper_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Non-lowercase character count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| !c.is_ascii_lowercase()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        is_lower: i64 = 0;\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                is_lower = 1;\n\
+            }}\n\
+        }}\n\
+        if is_lower == 0 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-non_lower_count".to_string(),
                 error: None,
             });
         }
