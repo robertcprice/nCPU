@@ -993,6 +993,10 @@ enum DualAccum {
     MeanPositiveEvensTrunc,
     /// Truncating mean of positive odd-valued elements (none → 0).
     MeanPositiveOddsTrunc,
+    /// Truncating mean of negative even-valued elements (none → 0).
+    MeanNegativeEvensTrunc,
+    /// Truncating mean of negative odd-valued elements (none → 0).
+    MeanNegativeOddsTrunc,
 }
 
 impl DualAccum {
@@ -1142,6 +1146,8 @@ impl DualAccum {
             DualAccum::MinNegativeOdds => "min_negative_odds",
             DualAccum::MeanPositiveEvensTrunc => "mean_positive_evens_trunc",
             DualAccum::MeanPositiveOddsTrunc => "mean_positive_odds_trunc",
+            DualAccum::MeanNegativeEvensTrunc => "mean_negative_evens_trunc",
+            DualAccum::MeanNegativeOddsTrunc => "mean_negative_odds_trunc",
         }
     }
 
@@ -1203,6 +1209,8 @@ impl DualAccum {
                 | DualAccum::MinNegativeOdds
                 | DualAccum::MeanPositiveEvensTrunc
                 | DualAccum::MeanPositiveOddsTrunc
+                | DualAccum::MeanNegativeEvensTrunc
+                | DualAccum::MeanNegativeOddsTrunc
                 | DualAccum::GcdAbsEvens
                 | DualAccum::GcdAbsOdds
                 | DualAccum::LcmAbsEvens
@@ -2288,6 +2296,30 @@ impl DualAccum {
                 let vals: Vec<i64> = arr
                     .iter()
                     .filter(|&&x| x > 0 && x % 2 != 0)
+                    .copied()
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    Some(vals.iter().sum::<i64>() / vals.len() as i64)
+                }
+            }
+            DualAccum::MeanNegativeEvensTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .filter(|&&x| x < 0 && x % 2 == 0)
+                    .copied()
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    Some(vals.iter().sum::<i64>() / vals.len() as i64)
+                }
+            }
+            DualAccum::MeanNegativeOddsTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .filter(|&&x| x < 0 && x % 2 != 0)
                     .copied()
                     .collect();
                 if vals.is_empty() {
@@ -4231,6 +4263,42 @@ DualAccum::SumSquaresOdds => format!(
     return total / count;\n\
 }}\n"
             ),
+            DualAccum::MeanNegativeEvensTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{\n\
+            if item % 2 == 0 {{\n\
+                total = total + item;\n\
+                count = count + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if count == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
+            DualAccum::MeanNegativeOddsTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{\n\
+            if item % 2 != 0 {{\n\
+                total = total + item;\n\
+                count = count + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if count == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
 
 
         }
@@ -5333,6 +5401,8 @@ fn try_dual_and_pairwise(
         DualAccum::MinNegativeOdds,
         DualAccum::MeanPositiveEvensTrunc,
         DualAccum::MeanPositiveOddsTrunc,
+        DualAccum::MeanNegativeEvensTrunc,
+        DualAccum::MeanNegativeOddsTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -7818,6 +7888,8 @@ enum KClosed {
     CountWhereAbsNeK,
     /// First index where |v| >= k (none → -1).
     FirstIndexWhereAbsGeK,
+    /// Last index where |v| >= k (none → -1).
+    LastIndexWhereAbsGeK,
 }
 
 impl KClosed {
@@ -7912,6 +7984,7 @@ impl KClosed {
             KClosed::LastWhereAbsNeK => "last_where_abs_ne_k",
             KClosed::CountWhereAbsNeK => "count_where_abs_ne_k",
             KClosed::FirstIndexWhereAbsGeK => "first_index_where_abs_ge_k",
+            KClosed::LastIndexWhereAbsGeK => "last_index_where_abs_ge_k",
         }
     }
 
@@ -8567,6 +8640,14 @@ impl KClosed {
             ),
             KClosed::FirstIndexWhereAbsGeK => {
                 for (i, &v) in arr.iter().enumerate() {
+                    if v.abs() >= k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::LastIndexWhereAbsGeK => {
+                for (i, &v) in arr.iter().enumerate().rev() {
                     if v.abs() >= k {
                         return Some(i as i64);
                     }
@@ -9807,6 +9888,21 @@ KClosed::MinWhereAbsNeK => format!(
     return 0 - 1;\n\
 }}\n"
             ),
+            KClosed::LastIndexWhereAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = arr.len - 1;\n\
+    while i >= 0 {{\n\
+        item: i64 = arr[i];\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a >= k {{\n\
+            return i;\n\
+        }}\n\
+        i = i - 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -9908,6 +10004,7 @@ fn try_k_closed(
         KClosed::LastWhereAbsNeK,
         KClosed::CountWhereAbsNeK,
         KClosed::FirstIndexWhereAbsGeK,
+        KClosed::LastIndexWhereAbsGeK,
     ] {
         let ok = inputs
             .iter()
@@ -11184,5 +11281,8 @@ mod tests {
         assert_eq!(DualAccum::MeanPositiveEvensTrunc.eval(&[-2, 3, 2, 4]), Some(3));
         assert_eq!(DualAccum::MeanPositiveOddsTrunc.eval(&[-2, 3, 1, 5]), Some(3));
         assert_eq!(KClosed::FirstIndexWhereAbsGeK.eval(&[-1, 2, 5], 4), Some(2));
+        assert_eq!(DualAccum::MeanNegativeEvensTrunc.eval(&[-4, 3, -2, 1]), Some(-3));
+        assert_eq!(DualAccum::MeanNegativeOddsTrunc.eval(&[-5, 2, -1, -3]), Some(-3));
+        assert_eq!(KClosed::LastIndexWhereAbsGeK.eval(&[-1, 5, 2, 6], 4), Some(3));
     }
 }
