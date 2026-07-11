@@ -1037,10 +1037,10 @@ enum DualAccum {
     AnyEvenNonPositive,
     /// 1 if any odd-valued element is non-positive (none → 0).
     AnyOddNonPositive,
-    /// Count of even-valued non-zero elements.
-    CountEvenNonZero,
-    /// Count of odd-valued non-zero elements.
-    CountOddNonZero,
+    /// Max among even-valued non-zero elements (none → 0).
+    MaxEvenNonZero,
+    /// Max among odd-valued non-zero elements (none → 0).
+    MaxOddNonZero,
 }
 
 impl DualAccum {
@@ -1212,8 +1212,8 @@ impl DualAccum {
             DualAccum::AnyOddNonNegative => "any_odd_non_negative",
             DualAccum::AnyEvenNonPositive => "any_even_non_positive",
             DualAccum::AnyOddNonPositive => "any_odd_non_positive",
-            DualAccum::CountEvenNonZero => "count_even_non_zero",
-            DualAccum::CountOddNonZero => "count_odd_non_zero",
+            DualAccum::MaxEvenNonZero => "max_even_non_zero",
+            DualAccum::MaxOddNonZero => "max_odd_non_zero",
         }
     }
 
@@ -1271,8 +1271,8 @@ impl DualAccum {
                 | DualAccum::CountPositiveOdds
                 | DualAccum::CountNegativeEvens
                 | DualAccum::CountNegativeOdds
-                | DualAccum::CountEvenNonZero
-                | DualAccum::CountOddNonZero
+                | DualAccum::MaxEvenNonZero
+                | DualAccum::MaxOddNonZero
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -2556,12 +2556,24 @@ impl DualAccum {
                     0
                 },
             ),
-            DualAccum::CountEvenNonZero => Some(
-                arr.iter().filter(|&&x| x % 2 == 0 && x != 0).count() as i64,
-            ),
-            DualAccum::CountOddNonZero => Some(
-                arr.iter().filter(|&&x| x % 2 != 0 && x != 0).count() as i64,
-            ),
+            DualAccum::MaxEvenNonZero => {
+                let mut best: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 == 0 && x != 0 {
+                        best = Some(best.map_or(x, |b| b.max(x)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            DualAccum::MaxOddNonZero => {
+                let mut best: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 != 0 && x != 0 {
+                        best = Some(best.map_or(x, |b| b.max(x)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
         }
     }
 
@@ -4783,30 +4795,44 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
-            DualAccum::CountEvenNonZero => format!(
+            DualAccum::MaxEvenNonZero => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
-    n: i64 = 0;\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
     for item in arr {{\n\
         if item % 2 == 0 {{\n\
             if item != 0 {{\n\
-                n = n + 1;\n\
+                if found == 0 {{\n\
+                    best = item;\n\
+                    found = 1;\n\
+                }}\n\
+                if item > best {{\n\
+                    best = item;\n\
+                }}\n\
             }}\n\
         }}\n\
     }}\n\
-    return n;\n\
+    return best;\n\
 }}\n"
             ),
-            DualAccum::CountOddNonZero => format!(
+            DualAccum::MaxOddNonZero => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
-    n: i64 = 0;\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
     for item in arr {{\n\
         if item % 2 != 0 {{\n\
             if item != 0 {{\n\
-                n = n + 1;\n\
+                if found == 0 {{\n\
+                    best = item;\n\
+                    found = 1;\n\
+                }}\n\
+                if item > best {{\n\
+                    best = item;\n\
+                }}\n\
             }}\n\
         }}\n\
     }}\n\
-    return n;\n\
+    return best;\n\
 }}\n"
             ),
 
@@ -5932,8 +5958,8 @@ fn try_dual_and_pairwise(
         DualAccum::AnyOddNonNegative,
         DualAccum::AnyEvenNonPositive,
         DualAccum::AnyOddNonPositive,
-        DualAccum::CountEvenNonZero,
-        DualAccum::CountOddNonZero,
+        DualAccum::MaxEvenNonZero,
+        DualAccum::MaxOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -8441,6 +8467,8 @@ enum KClosed {
     FirstIndexWhereAbsLtK,
     /// Last index where |v| < k (none → -1).
     LastIndexWhereAbsLtK,
+    /// Count elements divisible by k (k == 0 → None).
+    CountDivisibleByK,
 }
 
 impl KClosed {
@@ -8546,6 +8574,7 @@ impl KClosed {
             KClosed::LastIndexWhereAbsGtK => "last_index_where_abs_gt_k",
             KClosed::FirstIndexWhereAbsLtK => "first_index_where_abs_lt_k",
             KClosed::LastIndexWhereAbsLtK => "last_index_where_abs_lt_k",
+            KClosed::CountDivisibleByK => "count_divisible_by_k",
         }
     }
 
@@ -9294,6 +9323,12 @@ impl KClosed {
                     }
                 }
                 Some(-1)
+            }
+            KClosed::CountDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                Some(arr.iter().filter(|&&v| v % k == 0).count() as i64)
             }
         }
     }
@@ -10702,6 +10737,18 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::CountDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % k == 0 {{\n\
+            n = n + 1;\n\
+        }}\n\
+    }}\n\
+    return n;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -10814,6 +10861,7 @@ fn try_k_closed(
         KClosed::LastIndexWhereAbsGtK,
         KClosed::FirstIndexWhereAbsLtK,
         KClosed::LastIndexWhereAbsLtK,
+        KClosed::CountDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -12133,9 +12181,12 @@ mod tests {
         assert_eq!(DualAccum::AnyOddNonPositive.eval(&[2, -3, 5]), Some(1));
         assert_eq!(DualAccum::AnyEvenNonPositive.eval(&[2, 3, 4]), Some(0));
         assert_eq!(KClosed::FirstIndexWhereAbsLtK.eval(&[-5, 2, 4], 4), Some(1));
-        assert_eq!(DualAccum::CountEvenNonZero.eval(&[0, 2, 3, -4]), Some(2));
-        assert_eq!(DualAccum::CountOddNonZero.eval(&[0, 2, 3, -5]), Some(2));
-        assert_eq!(DualAccum::CountEvenNonZero.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(DualAccum::MaxEvenNonZero.eval(&[0, 2, 3, -4]), Some(2));
+        assert_eq!(DualAccum::MaxOddNonZero.eval(&[0, 2, 3, -5]), Some(3));
+        assert_eq!(DualAccum::MaxEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::LastIndexWhereAbsLtK.eval(&[-5, 2, 1], 4), Some(2));
+        assert_eq!(DualAccum::MaxEvenNonZero.eval(&[-6, 0, 4, 3]), Some(4));
+        assert_eq!(DualAccum::MaxOddNonZero.eval(&[-7, 0, 5, 2]), Some(5));
+        assert_eq!(KClosed::CountDivisibleByK.eval(&[2, 3, 4, 6], 2), Some(3));
     }
 }
