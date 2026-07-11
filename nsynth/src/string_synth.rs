@@ -2088,6 +2088,39 @@ pub fn synthesize_string_int_program(
             });
         }
     }
+    // Whitespace count (ASCII whitespace).
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_whitespace()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        hit: i64 = 0;\n\
+        if c == \" \" {{ hit = 1; }}\n\
+        if c == \"\\t\" {{ hit = 1; }}\n\
+        if c == \"\\n\" {{ hit = 1; }}\n\
+        if c == \"\\r\" {{ hit = 1; }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-whitespace_count".to_string(),
+                error: None,
+            });
+        }
+    }
     // Consonant count (ascii letters that are not vowels).
     if examples.iter().all(|(s, o)| {
         s.chars()
