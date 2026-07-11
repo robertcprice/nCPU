@@ -1177,6 +1177,16 @@ fn dual_product_fourth_powers_odd_non_zero(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x % 2 != 0 && x != 0).map(|&x| { let s = x.saturating_mul(x); s.saturating_mul(s) }).fold(1i64, i64::saturating_mul)
 }
 
+fn dual_mean_fourth_powers_even_non_zero_trunc(arr: &[i64]) -> i64 {
+    let xs: Vec<i64> = arr.iter().copied().filter(|&x| x % 2 == 0 && x != 0).map(|x| { let s = x.saturating_mul(x); s.saturating_mul(s) }).collect();
+    if xs.is_empty() { 0 } else { xs.iter().sum::<i64>() / xs.len() as i64 }
+}
+
+fn dual_mean_fourth_powers_odd_non_zero_trunc(arr: &[i64]) -> i64 {
+    let xs: Vec<i64> = arr.iter().copied().filter(|&x| x % 2 != 0 && x != 0).map(|x| { let s = x.saturating_mul(x); s.saturating_mul(s) }).collect();
+    if xs.is_empty() { 0 } else { xs.iter().sum::<i64>() / xs.len() as i64 }
+}
+
 fn dual_min_abs(arr: &[i64]) -> i64 {
     arr.iter().map(|&x| x.abs()).min().unwrap_or(0)
 }
@@ -2629,6 +2639,15 @@ fn k_product_non_zero_divisible_by(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v != 0 && v % k == 0).fold(1i64, |a, &b| a.saturating_mul(b))
 }
 
+fn k_max_non_zero_divisible_by(arr: &[i64], k: i64) -> i64 {
+    if k == 0 { return 0; }
+    let mut best: Option<i64> = None;
+    for &v in arr {
+        if v != 0 && v % k == 0 { best = Some(best.map_or(v, |b| b.max(v))); }
+    }
+    best.unwrap_or(0)
+}
+
 fn k_min_where_abs_eq(arr: &[i64], k: i64) -> i64 {
     let mut best = 0i64; let mut found = false;
     for &v in arr {
@@ -2993,6 +3012,9 @@ mod tests {
         assert_eq!(dual_product_fourth_powers_even_non_zero(&[0, -2, 2, 3]), 256);
         assert_eq!(dual_product_fourth_powers_odd_non_zero(&[0, -3, 1, 2]), 81);
         assert_eq!(dual_product_fourth_powers_even_non_zero(&[0, 1, 3]), 1);
+        assert_eq!(dual_mean_fourth_powers_even_non_zero_trunc(&[0, -2, 2, 3]), 16);
+        assert_eq!(dual_mean_fourth_powers_odd_non_zero_trunc(&[0, -3, 1, 2]), 41);
+        assert_eq!(dual_mean_fourth_powers_even_non_zero_trunc(&[0, 1, 3]), 0);
         assert_eq!(dual_min_abs(&[-3, 9, 2]), 2);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
@@ -3151,6 +3173,7 @@ mod tests {
         assert_eq!(k_count_non_zero_divisible_by(&[0, 4, 6, 3], 2), 2);
         assert_eq!(k_sum_non_zero_divisible_by(&[0, 4, 6, 3], 2), 10);
         assert_eq!(k_product_non_zero_divisible_by(&[0, 4, 6, 3], 2), 24);
+        assert_eq!(k_max_non_zero_divisible_by(&[0, 4, 6, 3], 2), 6);
         assert_eq!(index_sum_abs_odd_value_even(&[-3, 8, 5, 2]), 8);
         assert_eq!(index_sum_abs_odd_value_odd(&[-3, 9, 5, 7]), 16);
         assert_eq!(k_min_where_abs_eq(&[5, -5, 2], 5), -5);
@@ -3699,6 +3722,10 @@ fn join_with_bang_eq(s: &str, sep: &str) -> String {
     s.split(sep).collect::<Vec<_>>().join("!=")
 }
 
+fn join_with_question_eq(s: &str, sep: &str) -> String {
+    s.split(sep).collect::<Vec<_>>().join("?=")
+}
+
 fn sort_words_desc(s: &str, sep: &str) -> String {
     let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
     owned.sort();
@@ -4143,6 +4170,10 @@ fn non_letter_count(s: &str) -> i64 {
     s.chars().filter(|c| !c.is_ascii_alphabetic()).count() as i64
 }
 
+fn g_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.eq_ignore_ascii_case(&'g')).count() as i64
+}
+
 fn f_count(s: &str) -> i64 {
     s.chars().filter(|c| c.eq_ignore_ascii_case(&'f')).count() as i64
 }
@@ -4342,6 +4373,7 @@ c");
         assert_eq!(join_with_semi_eq("a b c", " "), "a;=b;=c");
         assert_eq!(join_with_colon_slash("a b c", " "), "a:/b:/c");
         assert_eq!(join_with_bang_eq("a b c", " "), "a!=b!=c");
+        assert_eq!(join_with_question_eq("a b c", " "), "a?=b?=c");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
@@ -4478,6 +4510,7 @@ c");
         assert_eq!(d_count("Daddy"), 3);
         assert_eq!(e_count("Eleven"), 3);
         assert_eq!(f_count("Fluff"), 3);
+        assert_eq!(g_count("Gaggle"), 3);
         assert_eq!(non_letter_count("a1B!"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);

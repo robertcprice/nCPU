@@ -1113,6 +1113,10 @@ enum DualAccum {
     ProductFourthPowersEvenNonZero,
     /// Product of fourth powers of odd-valued non-zero elements (none → 1).
     ProductFourthPowersOddNonZero,
+    /// Truncating mean of fourth powers of even-valued non-zero elements (none → 0).
+    MeanFourthPowersEvenNonZeroTrunc,
+    /// Truncating mean of fourth powers of odd-valued non-zero elements (none → 0).
+    MeanFourthPowersOddNonZeroTrunc,
 }
 
 impl DualAccum {
@@ -1322,6 +1326,8 @@ impl DualAccum {
             DualAccum::SumFourthPowersOddNonZero => "sum_fourth_powers_odd_non_zero",
             DualAccum::ProductFourthPowersEvenNonZero => "product_fourth_powers_even_non_zero",
             DualAccum::ProductFourthPowersOddNonZero => "product_fourth_powers_odd_non_zero",
+            DualAccum::MeanFourthPowersEvenNonZeroTrunc => "mean_fourth_powers_even_non_zero_trunc",
+            DualAccum::MeanFourthPowersOddNonZeroTrunc => "mean_fourth_powers_odd_non_zero_trunc",
         }
     }
 
@@ -1405,6 +1411,8 @@ impl DualAccum {
                 | DualAccum::SumCubesOddNonZero
                 | DualAccum::SumFourthPowersEvenNonZero
                 | DualAccum::SumFourthPowersOddNonZero
+                | DualAccum::MeanFourthPowersEvenNonZeroTrunc
+                | DualAccum::MeanFourthPowersOddNonZeroTrunc
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -3004,6 +3012,38 @@ impl DualAccum {
                     })
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanFourthPowersEvenNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 == 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
+            DualAccum::MeanFourthPowersOddNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 != 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
         }
     }
 
@@ -5901,6 +5941,44 @@ DualAccum::SumSquaresOdds => format!(
     return prod;\n\
 }}\n"
             ),
+            DualAccum::MeanFourthPowersEvenNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
+            DualAccum::MeanFourthPowersOddNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7062,6 +7140,8 @@ fn try_dual_and_pairwise(
         DualAccum::SumFourthPowersOddNonZero,
         DualAccum::ProductFourthPowersEvenNonZero,
         DualAccum::ProductFourthPowersOddNonZero,
+        DualAccum::MeanFourthPowersEvenNonZeroTrunc,
+        DualAccum::MeanFourthPowersOddNonZeroTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -9607,6 +9687,8 @@ enum KClosed {
     SumNonZeroDivisibleByK,
     /// Product of non-zero elements divisible by k (none → 1; k == 0 → None).
     ProductNonZeroDivisibleByK,
+    /// Max of non-zero elements divisible by k (none → 0; k == 0 → None).
+    MaxNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -9731,6 +9813,7 @@ impl KClosed {
             KClosed::CountNonZeroDivisibleByK => "count_non_zero_divisible_by_k",
             KClosed::SumNonZeroDivisibleByK => "sum_non_zero_divisible_by_k",
             KClosed::ProductNonZeroDivisibleByK => "product_non_zero_divisible_by_k",
+            KClosed::MaxNonZeroDivisibleByK => "max_non_zero_divisible_by_k",
         }
     }
 
@@ -10697,6 +10780,18 @@ impl KClosed {
                         .filter(|&&v| v != 0 && v % k == 0)
                         .fold(1i64, |a, &b| a.saturating_mul(b)),
                 )
+            }
+            KClosed::MaxNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut best: Option<i64> = None;
+                for &v in arr {
+                    if v != 0 && v % k == 0 {
+                        best = Some(best.map_or(v, |b| b.max(v)));
+                    }
+                }
+                Some(best.unwrap_or(0))
             }
         }
     }
@@ -12415,6 +12510,26 @@ KClosed::MinWhereAbsNeK => format!(
     return prod;\n\
 }}\n"
             ),
+            KClosed::MaxNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                if found == 0 {{\n\
+                    best = item;\n\
+                    found = 1;\n\
+                }}\n\
+                if item > best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
 
         }
     }
@@ -12547,6 +12662,7 @@ fn try_k_closed(
         KClosed::CountNonZeroDivisibleByK,
         KClosed::SumNonZeroDivisibleByK,
         KClosed::ProductNonZeroDivisibleByK,
+        KClosed::MaxNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -13945,5 +14061,9 @@ mod tests {
         assert_eq!(DualAccum::ProductFourthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(81));
         assert_eq!(DualAccum::ProductFourthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
         assert_eq!(KClosed::ProductNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(24));
+        assert_eq!(DualAccum::MeanFourthPowersEvenNonZeroTrunc.eval(&[0, -2, 2, 3]), Some(16));
+        assert_eq!(DualAccum::MeanFourthPowersOddNonZeroTrunc.eval(&[0, -3, 1, 2]), Some(41));
+        assert_eq!(DualAccum::MeanFourthPowersEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::MaxNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(6));
     }
 }
