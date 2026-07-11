@@ -801,6 +801,12 @@ enum DualAccum {
     SumCubes,
     /// Count of elements strictly greater than truncating mean.
     CountGtMean,
+    /// Count of elements strictly less than truncating mean.
+    CountLtMean,
+    /// 1 if arr is a palindrome (empty → 1), else 0.
+    IsPalindrome,
+    /// Product of even-valued elements (none → 1).
+    ProductEvens,
 }
 
 impl DualAccum {
@@ -854,6 +860,9 @@ impl DualAccum {
             DualAccum::ProductNegatives => "product_negatives",
             DualAccum::SumCubes => "sum_cubes",
             DualAccum::CountGtMean => "count_gt_mean",
+            DualAccum::CountLtMean => "count_lt_mean",
+            DualAccum::IsPalindrome => "is_palindrome",
+            DualAccum::ProductEvens => "product_evens",
         }
     }
 
@@ -892,9 +901,15 @@ impl DualAccum {
                 | DualAccum::LastPositive
                 | DualAccum::FirstNegative
                 | DualAccum::LastNegative => Some(0),
-                DualAccum::ProductPositives | DualAccum::ProductNegatives => Some(1),
+                DualAccum::ProductPositives
+                | DualAccum::ProductNegatives
+                | DualAccum::ProductEvens => Some(1),
                 DualAccum::SumCubes => Some(0),
-                DualAccum::MeanAbsTrunc | DualAccum::MeanTrunc | DualAccum::CountGtMean => None,
+                DualAccum::IsPalindrome => Some(1),
+                DualAccum::MeanAbsTrunc
+                | DualAccum::MeanTrunc
+                | DualAccum::CountGtMean
+                | DualAccum::CountLtMean => None,
                 _ => None,
             };
         }
@@ -1256,6 +1271,25 @@ impl DualAccum {
                 let mean = sum / (arr.len() as i64);
                 Some(arr.iter().filter(|&&x| x > mean).count() as i64)
             }
+            DualAccum::CountLtMean => {
+                let sum = arr.iter().copied().fold(0i64, i64::saturating_add);
+                let mean = sum / (arr.len() as i64);
+                Some(arr.iter().filter(|&&x| x < mean).count() as i64)
+            }
+            DualAccum::IsPalindrome => {
+                let n = arr.len();
+                Some(if (0..n / 2).all(|i| arr[i] == arr[n - 1 - i]) {
+                    1
+                } else {
+                    0
+                })
+            }
+            DualAccum::ProductEvens => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0)
+                    .copied()
+                    .fold(1i64, i64::saturating_mul),
+            ),
         }
     }
 
@@ -1828,6 +1862,45 @@ impl DualAccum {
     return count;\n\
 }}\n"
             ),
+            DualAccum::CountLtMean => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    sum: i64 = 0;\n\
+    for item in arr {{\n\
+        sum = sum + item;\n\
+    }}\n\
+    mean: i64 = sum / arr.len;\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < mean {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            DualAccum::IsPalindrome => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 0;\n\
+    j: i64 = arr.len - 1;\n\
+    while i < j {{\n\
+        if arr[i] != arr[j] {{ return 0; }}\n\
+        i = i + 1;\n\
+        j = j - 1;\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
+            DualAccum::ProductEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            total = total * item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1877,6 +1950,8 @@ enum PairwiseScan {
     CountPlateaus,
     /// 1 if adjacent deltas strictly alternate sign (len<3 → 1), else 0.
     IsZigZag,
+    /// Min positive adjacent rise (0 if none).
+    MinIncrease,
 }
 
 impl PairwiseScan {
@@ -1903,6 +1978,7 @@ impl PairwiseScan {
             PairwiseScan::SumDecreases => "sum_decreases",
             PairwiseScan::CountPlateaus => "count_plateaus",
             PairwiseScan::IsZigZag => "is_zigzag",
+            PairwiseScan::MinIncrease => "min_increase",
         }
     }
 
@@ -2170,6 +2246,20 @@ impl PairwiseScan {
                     }
                 }
                 Some(if ok { 1 } else { 0 })
+            }
+            PairwiseScan::MinIncrease => {
+                let mut best = 0i64;
+                let mut found = false;
+                for i in 1..arr.len() {
+                    let rise = arr[i].saturating_sub(arr[i - 1]);
+                    if rise > 0 {
+                        if !found || rise < best {
+                            best = rise;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -2467,6 +2557,26 @@ impl PairwiseScan {
     return 1;\n\
 }}\n"
             ),
+            PairwiseScan::MinIncrease => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        rise: i64 = arr[i] - arr[i - 1];\n\
+        if rise > 0 {{\n\
+            if found == 0 {{\n\
+                best = rise;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if rise < best {{ best = rise; }}\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2526,6 +2636,9 @@ fn try_dual_and_pairwise(
         DualAccum::ProductNegatives,
         DualAccum::SumCubes,
         DualAccum::CountGtMean,
+        DualAccum::CountLtMean,
+        DualAccum::IsPalindrome,
+        DualAccum::ProductEvens,
     ] {
         let ok = inputs
             .iter()
@@ -2567,6 +2680,7 @@ fn try_dual_and_pairwise(
         PairwiseScan::SumDecreases,
         PairwiseScan::CountPlateaus,
         PairwiseScan::IsZigZag,
+        PairwiseScan::MinIncrease,
     ] {
         let ok = inputs
             .iter()
@@ -3214,6 +3328,8 @@ enum KClosed {
     CountNeK,
     /// Max among elements strictly less than `k` (none → None).
     MaxLtK,
+    /// Min among elements strictly greater than `k` (none → None).
+    MinGtK,
 }
 
 impl KClosed {
@@ -3233,6 +3349,7 @@ impl KClosed {
             KClosed::SumEqK => "sum_eq_k",
             KClosed::CountNeK => "count_ne_k",
             KClosed::MaxLtK => "max_lt_k",
+            KClosed::MinGtK => "min_gt_k",
         }
     }
 
@@ -3310,6 +3427,18 @@ impl KClosed {
                     if v < k {
                         best = Some(match best {
                             Some(b) if b >= v => b,
+                            _ => v,
+                        });
+                    }
+                }
+                best
+            }
+            KClosed::MinGtK => {
+                let mut best: Option<i64> = None;
+                for &v in arr {
+                    if v > k {
+                        best = Some(match best {
+                            Some(b) if b <= v => b,
                             _ => v,
                         });
                     }
@@ -3463,6 +3592,25 @@ impl KClosed {
     return best;\n\
 }}\n"
             ),
+            KClosed::MinGtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > k {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item < best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -3489,6 +3637,7 @@ fn try_k_closed(
         KClosed::SumEqK,
         KClosed::CountNeK,
         KClosed::MaxLtK,
+        KClosed::MinGtK,
     ] {
         let ok = inputs
             .iter()
@@ -4515,5 +4664,11 @@ mod tests {
         assert_eq!(IndexScan::ArgMinAbs.eval(&[5, -1, 3]), Some(1));
         assert_eq!(KClosed::CountNeK.eval(&[1, 5, 5, 2], 5), Some(2));
         assert_eq!(KClosed::MaxLtK.eval(&[1, 5, 3, 2], 4), Some(3));
+        assert_eq!(DualAccum::CountLtMean.eval(&[1, 2, 3, 10]), Some(3));
+        assert_eq!(DualAccum::IsPalindrome.eval(&[1, 2, 1]), Some(1));
+        assert_eq!(DualAccum::IsPalindrome.eval(&[1, 2, 3]), Some(0));
+        assert_eq!(DualAccum::ProductEvens.eval(&[1, 2, 3, 4]), Some(8));
+        assert_eq!(PairwiseScan::MinIncrease.eval(&[1, 5, 2, 9]), Some(4));
+        assert_eq!(KClosed::MinGtK.eval(&[1, 5, 3, 2], 2), Some(3));
     }
 }

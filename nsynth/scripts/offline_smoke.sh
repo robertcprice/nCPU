@@ -405,6 +405,21 @@ fn dual_count_gt_mean(arr: &[i64]) -> Option<i64> {
     Some(arr.iter().filter(|&&x| x > mean).count() as i64)
 }
 
+fn dual_count_lt_mean(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mean = arr.iter().sum::<i64>() / (arr.len() as i64);
+    Some(arr.iter().filter(|&&x| x < mean).count() as i64)
+}
+
+fn dual_is_palindrome(arr: &[i64]) -> i64 {
+    let n = arr.len();
+    if (0..n/2).all(|i| arr[i] == arr[n-1-i]) { 1 } else { 0 }
+}
+
+fn dual_product_evens(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x % 2 == 0).copied().fold(1, i64::saturating_mul)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -693,6 +708,19 @@ fn pairwise_is_zigzag(arr: &[i64]) -> i64 {
     1
 }
 
+fn pairwise_min_increase(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for i in 1..arr.len() {
+        let rise = arr[i] - arr[i - 1];
+        if rise > 0 && (!found || rise < best) {
+            best = rise;
+            found = true;
+        }
+    }
+    best
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -783,6 +811,16 @@ fn k_max_lt(arr: &[i64], k: i64) -> Option<i64> {
     for &v in arr {
         if v < k {
             best = Some(match best { Some(b) if b >= v => b, _ => v });
+        }
+    }
+    best
+}
+
+fn k_min_gt(arr: &[i64], k: i64) -> Option<i64> {
+    let mut best = None;
+    for &v in arr {
+        if v > k {
+            best = Some(match best { Some(b) if b <= v => b, _ => v });
         }
     }
     best
@@ -944,6 +982,9 @@ mod tests {
         assert_eq!(dual_product_negatives(&[-2, -3, 4]), 6);
         assert_eq!(dual_sum_cubes(&[1, 2, -1]), 8);
         assert_eq!(dual_count_gt_mean(&[1, 2, 3, 10]), Some(1));
+        assert_eq!(dual_count_lt_mean(&[1, 2, 3, 10]), Some(3));
+        assert_eq!(dual_is_palindrome(&[1, 2, 1]), 1);
+        assert_eq!(dual_product_evens(&[1, 2, 3, 4]), 8);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -963,6 +1004,7 @@ mod tests {
         assert_eq!(k_sum_eq(&[2, 5, 2, 2], 2), 6);
         assert_eq!(k_count_ne(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_max_lt(&[1, 5, 3, 2], 4), Some(3));
+        assert_eq!(k_min_gt(&[1, 5, 3, 2], 2), Some(3));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -1002,6 +1044,7 @@ mod tests {
         assert_eq!(pairwise_count_plateaus(&[1, 1, 2, 2, 2, 3]), Some(3));
         assert_eq!(pairwise_is_zigzag(&[1, 3, 2, 5, 0]), 1);
         assert_eq!(pairwise_is_zigzag(&[1, 2, 3]), 0);
+        assert_eq!(pairwise_min_increase(&[1, 5, 2, 9]), 4);
     }
 }
 EOF
@@ -1135,6 +1178,10 @@ fn sum_word_lens(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).sum()
 }
 
+fn space_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == ' ').count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1176,6 +1223,7 @@ mod tests {
         assert_eq!(vowel_count("Beautiful"), 5);
         assert_eq!(consonant_count("Beautiful"), 4);
         assert_eq!(sum_word_lens("a to moon", " "), 7);
+        assert_eq!(space_count("a b c"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
