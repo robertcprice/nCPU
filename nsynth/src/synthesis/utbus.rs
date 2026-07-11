@@ -1085,6 +1085,10 @@ enum DualAccum {
     MaxAbsEvenNonZero,
     /// Max abs among odd-valued non-zero elements (none → 0).
     MaxAbsOddNonZero,
+    /// Min abs among even-valued non-zero elements (none → 0).
+    MinAbsEvenNonZero,
+    /// Min abs among odd-valued non-zero elements (none → 0).
+    MinAbsOddNonZero,
 }
 
 impl DualAccum {
@@ -1280,6 +1284,8 @@ impl DualAccum {
             DualAccum::MeanAbsOddNonZeroTrunc => "mean_abs_odd_non_zero_trunc",
             DualAccum::MaxAbsEvenNonZero => "max_abs_even_non_zero",
             DualAccum::MaxAbsOddNonZero => "max_abs_odd_non_zero",
+            DualAccum::MinAbsEvenNonZero => "min_abs_even_non_zero",
+            DualAccum::MinAbsOddNonZero => "min_abs_odd_non_zero",
         }
     }
 
@@ -1355,6 +1361,8 @@ impl DualAccum {
                 | DualAccum::MeanAbsOddNonZeroTrunc
                 | DualAccum::MaxAbsEvenNonZero
                 | DualAccum::MaxAbsOddNonZero
+                | DualAccum::MinAbsEvenNonZero
+                | DualAccum::MinAbsOddNonZero
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -2840,6 +2848,26 @@ impl DualAccum {
                     if x % 2 != 0 && x != 0 {
                         let a = x.abs();
                         best = Some(best.map_or(a, |b| b.max(a)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            DualAccum::MinAbsEvenNonZero => {
+                let mut best: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 == 0 && x != 0 {
+                        let a = x.abs();
+                        best = Some(best.map_or(a, |b| b.min(a)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            DualAccum::MinAbsOddNonZero => {
+                let mut best: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 != 0 && x != 0 {
+                        let a = x.abs();
+                        best = Some(best.map_or(a, |b| b.min(a)));
                     }
                 }
                 Some(best.unwrap_or(0))
@@ -5533,6 +5561,51 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
+            DualAccum::MinAbsEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                if found == 0 {{\n\
+                    best = a;\n\
+                    found = 1;\n\
+                }}\n\
+                if a < best {{\n\
+                    best = a;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MinAbsOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                if found == 0 {{\n\
+                    best = a;\n\
+                    found = 1;\n\
+                }}\n\
+                if a < best {{\n\
+                    best = a;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -6679,6 +6752,8 @@ fn try_dual_and_pairwise(
         DualAccum::MeanAbsOddNonZeroTrunc,
         DualAccum::MaxAbsEvenNonZero,
         DualAccum::MaxAbsOddNonZero,
+        DualAccum::MinAbsEvenNonZero,
+        DualAccum::MinAbsOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -9210,6 +9285,8 @@ enum KClosed {
     AbsProductDivisibleByK,
     /// Max |v| among elements divisible by k (none → 0; k == 0 → None).
     MaxAbsDivisibleByK,
+    /// Min |v| among elements divisible by k (none → 0; k == 0 → None).
+    MinAbsDivisibleByK,
 }
 
 impl KClosed {
@@ -9327,6 +9404,7 @@ impl KClosed {
             KClosed::AbsSumDivisibleByK => "abs_sum_divisible_by_k",
             KClosed::AbsProductDivisibleByK => "abs_product_divisible_by_k",
             KClosed::MaxAbsDivisibleByK => "max_abs_divisible_by_k",
+            KClosed::MinAbsDivisibleByK => "min_abs_divisible_by_k",
         }
     }
 
@@ -10203,6 +10281,19 @@ impl KClosed {
                     if v % k == 0 {
                         let a = v.abs();
                         best = Some(best.map_or(a, |b| b.max(a)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            KClosed::MinAbsDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut best: Option<i64> = None;
+                for &v in arr {
+                    if v % k == 0 {
+                        let a = v.abs();
+                        best = Some(best.map_or(a, |b| b.min(a)));
                     }
                 }
                 Some(best.unwrap_or(0))
@@ -11790,6 +11881,27 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::MinAbsDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % k == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            if found == 0 {{\n\
+                best = a;\n\
+                found = 1;\n\
+            }}\n\
+            if a < best {{\n\
+                best = a;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -11914,6 +12026,7 @@ fn try_k_closed(
         KClosed::AbsSumDivisibleByK,
         KClosed::AbsProductDivisibleByK,
         KClosed::MaxAbsDivisibleByK,
+        KClosed::MinAbsDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -13284,5 +13397,9 @@ mod tests {
         assert_eq!(DualAccum::MaxAbsOddNonZero.eval(&[0, -7, 5, 2]), Some(7));
         assert_eq!(DualAccum::MaxAbsEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::MaxAbsDivisibleByK.eval(&[-8, 3, 4], 2), Some(8));
+        assert_eq!(DualAccum::MinAbsEvenNonZero.eval(&[0, -8, 2, 3]), Some(2));
+        assert_eq!(DualAccum::MinAbsOddNonZero.eval(&[0, -7, 5, 2]), Some(5));
+        assert_eq!(DualAccum::MinAbsEvenNonZero.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::MinAbsDivisibleByK.eval(&[-8, 3, 4], 2), Some(4));
     }
 }
