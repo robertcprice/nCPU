@@ -190,7 +190,7 @@ fn array_teacher_examples_from_code(problem: &Problem, teacher_code: &str) -> Op
 
 pub(super) fn synthesize_array_gradient_only(problem: &Problem) -> Option<SolveResult> {
     // Experimental unified typed bottom-up core (UTBUS). No-op unless
-    // NSYNTH_UTBUS=1, so default behavior is byte-identical to the legacy path.
+    // NSYNTH_UTBUS=1 (full) or =closed (closed families only).
     if let Some(result) = super::utbus::synthesize_utbus(problem) {
         return Some(result);
     }

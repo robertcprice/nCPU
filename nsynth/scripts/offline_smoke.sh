@@ -69,7 +69,7 @@ cat > "$TMP/utbus_reduce/src/lib.rs" <<'EOF'
 //! so Phase A expand stays checkable without linguigenesis-core.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reduce { Sum, Max, Min, Count, Product, Xor }
+enum Reduce { Sum, Max, Min, Count, Product, Xor, BitOr, BitAnd }
 
 impl Reduce {
     fn apply(self, arr: &[i64]) -> i64 {
@@ -80,6 +80,8 @@ impl Reduce {
             Reduce::Count => arr.len() as i64,
             Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
             Reduce::Xor => arr.iter().copied().fold(0i64, |a, b| a ^ b),
+            Reduce::BitOr => arr.iter().copied().fold(0i64, |a, b| a | b),
+            Reduce::BitAnd => arr.iter().copied().fold(-1i64, |a, b| a & b),
         }
     }
 }
@@ -109,6 +111,8 @@ fn synthesize(examples: &[(Vec<i64>, i64)]) -> Option<(Pred, Reduce)> {
         (Pred::All, Reduce::Min),
         (Pred::All, Reduce::Product),
         (Pred::All, Reduce::Xor),
+        (Pred::All, Reduce::BitOr),
+        (Pred::All, Reduce::BitAnd),
         (Pred::Positive, Reduce::Count),
         (Pred::Positive, Reduce::Sum),
     ];
@@ -396,6 +400,26 @@ mod tests {
         ];
         let (_, reduce) = synthesize(&ex).expect("xor");
         assert!(matches!(reduce, Reduce::Xor));
+    }
+
+    #[test]
+    fn array_bitor_and_bitand() {
+        // Overlapping bits so OR ≠ SUM (powers-of-two OR equals SUM).
+        let or_ex = vec![
+            (vec![3, 5], 7),
+            (vec![6, 3], 7),
+            (vec![12, 10], 14),
+        ];
+        let (_, r) = synthesize(&or_ex).expect("bitor");
+        assert!(matches!(r, Reduce::BitOr));
+        // AND must differ from Min and Xor (common collisions).
+        let and_ex = vec![
+            (vec![9, 12, 10], 8),
+            (vec![25, 27, 30], 24),
+            (vec![15, 21, 25], 1),
+        ];
+        let (_, r) = synthesize(&and_ex).expect("bitand");
+        assert!(matches!(r, Reduce::BitAnd));
     }
 
     #[test]

@@ -20,6 +20,8 @@ if not tasks:
     print("dual_lane_solve: missing /tmp/mbpp_bench.jsonl — run scripts/mbpp_prepare.py first", file=sys.stderr)
     sys.exit(2)
 base=tempfile.mkdtemp(prefix="un_"); os.environ["HOME"]=base+"/home"; os.makedirs(os.environ["HOME"],exist_ok=True)
+# Cheap UTBUS closed families on the engine lane (no enum explosion).
+os.environ.setdefault("NSYNTH_UTBUS", "closed")
 
 def rtype(v):
     if isinstance(v,bool):return "bool"

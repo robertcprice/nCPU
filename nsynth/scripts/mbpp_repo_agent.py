@@ -13,6 +13,7 @@ AGENT=os.environ.get("NSYNTH_CODING_AGENT") or os.path.join(os.path.dirname(os.p
 BENCH=os.environ.get("NSYNTH_MBPP_BENCH", "/tmp/mbpp_bench.jsonl")
 N=int(sys.argv[1]) if len(sys.argv)>1 else 40
 TMO=int(os.environ.get("SC_TIMEOUT","200"))
+os.environ.setdefault("NSYNTH_UTBUS", "closed")
 
 def rtype(v):
     if isinstance(v,bool): return "bool"

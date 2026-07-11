@@ -15,9 +15,10 @@
 //! ([`verify_problem_code_strict`]). Reaching parity here without touching the
 //! legacy path is the evidence that the shared core is real.
 //!
-//! The whole module is gated behind the `NSYNTH_UTBUS=1` environment variable.
-//! When that variable is unset (the default), [`synthesize_utbus`] returns
-//! `None` immediately and the legacy behaviour is byte-for-byte unchanged.
+//! The module is gated behind `NSYNTH_UTBUS`:
+//! - `NSYNTH_UTBUS=1` — full Phase A (closed families + filter→map→reduce enum)
+//! - `NSYNTH_UTBUS=closed` — closed families only (cheap A3/A4/A5/k parity)
+//! - unset — [`synthesize_utbus`] returns `None` (legacy path unchanged)
 //!
 //! Scope of this slice (intentionally minimal but *real*):
 //!   * Output types ScalarInt / ArrayInt / Str / Bool, inferred from the
@@ -41,13 +42,20 @@
 
 use super::*;
 
-/// Whether the UTBUS path is enabled. Reads `NSYNTH_UTBUS`; only the exact
-/// value `"1"` turns it on, so the default (unset / anything else) leaves the
-/// legacy path entirely untouched.
+/// Whether the UTBUS path is enabled. Reads `NSYNTH_UTBUS`:
+/// - `"1"` — full Phase A (closed families + filter→map→reduce enum)
+/// - `"closed"` — closed families only (dual/pairwise/index/k)
+/// - anything else / unset — off (legacy path unchanged)
+fn utbus_mode() -> Option<&'static str> {
+    match std::env::var("NSYNTH_UTBUS").ok().as_deref() {
+        Some("1") => Some("full"),
+        Some("closed") => Some("closed"),
+        _ => None,
+    }
+}
+
 fn utbus_enabled() -> bool {
-    std::env::var("NSYNTH_UTBUS")
-        .map(|v| v == "1")
-        .unwrap_or(false)
+    utbus_mode().is_some()
 }
 
 /// True when the Mog signature is `[i64] → i64` or `[i64], k: i64 → i64`
@@ -289,6 +297,10 @@ enum Reduce {
     Product,
     /// Bitwise XOR fold (empty → 0).
     Xor,
+    /// Bitwise OR fold (empty → 0).
+    BitOr,
+    /// Bitwise AND fold (empty → -1).
+    BitAnd,
 }
 
 impl Reduce {
@@ -300,6 +312,8 @@ impl Reduce {
             Reduce::Count => "count",
             Reduce::Product => "product",
             Reduce::Xor => "xor",
+            Reduce::BitOr => "bitor",
+            Reduce::BitAnd => "bitand",
         }
     }
 
@@ -311,6 +325,8 @@ impl Reduce {
             Reduce::Count => arr.len() as i64,
             Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
             Reduce::Xor => arr.iter().copied().fold(0i64, |a, b| a ^ b),
+            Reduce::BitOr => arr.iter().copied().fold(0i64, |a, b| a | b),
+            Reduce::BitAnd => arr.iter().copied().fold(-1i64, |a, b| a & b),
         }
     }
 }
@@ -390,7 +406,7 @@ impl ArrayProgram {
             Reduce::Count => 1,
             Reduce::Max | Reduce::Min => 1,
             Reduce::Product => 1,
-            Reduce::Xor => 1,
+            Reduce::Xor | Reduce::BitOr | Reduce::BitAnd => 1,
         };
         pred_cost + map_cost + order_cost + prefix_cost + reduce_cost
     }
@@ -540,6 +556,20 @@ impl ArrayProgram {
                 body.push_str("    }\n");
                 body.push_str("    return total;\n");
             }
+            Reduce::BitOr => {
+                body.push_str("    total: i64 = 0;\n");
+                body.push_str("    for item in a {\n");
+                body.push_str("        total = total | item;\n");
+                body.push_str("    }\n");
+                body.push_str("    return total;\n");
+            }
+            Reduce::BitAnd => {
+                body.push_str("    total: i64 = 0 - 1;\n");
+                body.push_str("    for item in a {\n");
+                body.push_str("        total = total & item;\n");
+                body.push_str("    }\n");
+                body.push_str("    return total;\n");
+            }
         }
         body.push_str("}\n");
         body
@@ -593,6 +623,8 @@ fn enumerate_array_programs(include_k_preds: bool) -> Vec<ArrayProgram> {
         Reduce::Min,
         Reduce::Product,
         Reduce::Xor,
+        Reduce::BitOr,
+        Reduce::BitAnd,
     ];
 
     let mut programs = Vec::new();
@@ -1709,9 +1741,7 @@ fn try_k_closed(
 /// the first candidate that passes [`verify_problem_code_strict`] (examples +
 /// holdouts).
 pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
-    if !utbus_enabled() {
-        return None;
-    }
+    let mode = utbus_mode()?;
 
     // This slice only reaches parity for scalar-output array problems.
     if Utype::from_return_signature(problem.signature) != Some(Utype::ScalarInt) {
@@ -1752,6 +1782,11 @@ pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
         }
     } else if let Some(hit) = try_k_closed(problem, fn_name, &inputs, &ks, &expected) {
         return Some(hit);
+    }
+
+    // `NSYNTH_UTBUS=closed` stops here — no combinatorial enum.
+    if mode == "closed" {
+        return None;
     }
 
     // Keep EVERY program whose scalar outputs match the examples (cheapest
@@ -2157,6 +2192,8 @@ mod tests {
         assert!(programs.iter().any(|p| p.reduce == Reduce::Count));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Product));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Xor));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::BitOr));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::BitAnd));
         assert!(programs.iter().all(|p| !p.pred.uses_k()));
         let with_k = enumerate_array_programs(true);
         assert!(with_k.iter().any(|p| p.pred == ElemPred::GtK));
