@@ -438,6 +438,10 @@ fn dual_sum_sq_diff_mean(arr: &[i64]) -> Option<i64> {
     Some(arr.iter().map(|&x| { let d = x - mean; d*d }).sum())
 }
 
+fn dual_any_non_zero(arr: &[i64]) -> i64 {
+    if arr.iter().any(|&x| x != 0) { 1 } else { 0 }
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -763,6 +767,20 @@ fn pairwise_mean_abs_diff_trunc(arr: &[i64]) -> i64 {
     total / ((arr.len() - 1) as i64)
 }
 
+fn pairwise_count_sign_changes(arr: &[i64]) -> i64 {
+    let mut count = 0i64;
+    let mut prev = 0i64;
+    for i in 1..arr.len() {
+        let d = arr[i] - arr[i - 1];
+        let sign = if d > 0 { 1 } else if d < 0 { -1 } else { 0 };
+        if sign != 0 {
+            if prev != 0 && sign != prev { count += 1; }
+            prev = sign;
+        }
+    }
+    count
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -893,6 +911,16 @@ fn k_max_gt(arr: &[i64], k: i64) -> Option<i64> {
     for &v in arr {
         if v > k {
             best = Some(match best { Some(b) if b >= v => b, _ => v });
+        }
+    }
+    best
+}
+
+fn k_min_lt(arr: &[i64], k: i64) -> Option<i64> {
+    let mut best = None;
+    for &v in arr {
+        if v < k {
+            best = Some(match best { Some(b) if b <= v => b, _ => v });
         }
     }
     best
@@ -1061,6 +1089,7 @@ mod tests {
         assert_eq!(dual_all_non_positive(&[-1, 0, -2]), 1);
         assert_eq!(dual_dot_index(&[10, 20, 30]), 80);
         assert_eq!(dual_sum_sq_diff_mean(&[1, 2, 3]), Some(2));
+        assert_eq!(dual_any_non_zero(&[0, 0, 1]), 1);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1087,6 +1116,7 @@ mod tests {
         assert_eq!(k_min_gt(&[1, 5, 3, 2], 2), Some(3));
         assert_eq!(k_sum_ne(&[1, 5, 5, 2], 5), 3);
         assert_eq!(k_max_gt(&[1, 5, 3, 2], 2), Some(5));
+        assert_eq!(k_min_lt(&[1, 5, 3, 2], 4), Some(1));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -1129,6 +1159,7 @@ mod tests {
         assert_eq!(pairwise_min_increase(&[1, 5, 2, 9]), 4);
         assert_eq!(pairwise_min_decrease(&[9, 2, 8, 1]), 7);
         assert_eq!(pairwise_mean_abs_diff_trunc(&[1, 4, 2]), 2);
+        assert_eq!(pairwise_count_sign_changes(&[1, 3, 2, 5, 0]), 3);
     }
 }
 EOF
