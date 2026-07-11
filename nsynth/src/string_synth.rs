@@ -887,6 +887,7 @@ enum WordShape {
     JoinWithTildeEq,
     JoinWithDotEq,
     JoinWithCommaEq,
+    JoinWithSemiEq,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1021,6 +1022,7 @@ impl WordShape {
             WordShape::JoinWithTildeEq => "join_with_tilde_eq",
             WordShape::JoinWithDotEq => "join_with_dot_eq",
             WordShape::JoinWithCommaEq => "join_with_comma_eq",
+            WordShape::JoinWithSemiEq => "join_with_semi_eq",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1473,6 +1475,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithTildeEq => words.join("~="),
         WordShape::JoinWithDotEq => words.join(".="),
         WordShape::JoinWithCommaEq => words.join(",="),
+        WordShape::JoinWithSemiEq => words.join(";="),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1867,6 +1870,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithCommaEq => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\",=\");\n}}\n"
         ),
+        WordShape::JoinWithSemiEq => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\";=\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1897,7 +1903,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 127] = [
+    const SHAPES: [WordShape; 128] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -2023,6 +2029,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithTildeEq,
         WordShape::JoinWithDotEq,
         WordShape::JoinWithCommaEq,
+        WordShape::JoinWithSemiEq,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2427,6 +2434,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Letter 'd'/'D' count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.eq_ignore_ascii_case(&'d')).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c == \"d\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-d_count".to_string(),
                 error: None,
             });
         }
