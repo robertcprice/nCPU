@@ -2398,6 +2398,7 @@ fn try_dual_and_pairwise(
         IndexScan::MinEvenIndices,
         IndexScan::MaxOddIndices,
         IndexScan::MinOddIndices,
+        IndexScan::ArgMaxAbs,
     ] {
         let ok = inputs
             .iter()
@@ -2459,6 +2460,8 @@ enum IndexScan {
     MaxOddIndices,
     /// Min among odd-index elements (no odd indices → None).
     MinOddIndices,
+    /// Index of the first maximum-absolute-value element (empty → None).
+    ArgMaxAbs,
 }
 
 impl IndexScan {
@@ -2483,6 +2486,7 @@ impl IndexScan {
             IndexScan::MinEvenIndices => "min_even_indices",
             IndexScan::MaxOddIndices => "max_odd_indices",
             IndexScan::MinOddIndices => "min_odd_indices",
+            IndexScan::ArgMaxAbs => "argmax_abs",
         }
     }
 
@@ -2678,6 +2682,21 @@ impl IndexScan {
                     }
                 }
                 best
+            }
+            IndexScan::ArgMaxAbs => {
+                if arr.is_empty() {
+                    return None;
+                }
+                let mut best_i = 0usize;
+                let mut best_abs = arr[0].abs();
+                for i in 1..arr.len() {
+                    let a = arr[i].abs();
+                    if a > best_abs {
+                        best_abs = a;
+                        best_i = i;
+                    }
+                }
+                Some(best_i as i64)
             }
         }
     }
@@ -2895,6 +2914,24 @@ impl IndexScan {
         i = i + 2;\n\
     }}\n\
     return best;\n\
+}}\n"
+            ),
+            IndexScan::ArgMaxAbs => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best_i: i64 = 0;\n\
+    best_abs: i64 = arr[0];\n\
+    if best_abs < 0 {{ best_abs = 0 - best_abs; }}\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a > best_abs {{\n\
+            best_abs = a;\n\
+            best_i = i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best_i;\n\
 }}\n"
             ),
         }
@@ -4167,5 +4204,7 @@ mod tests {
         assert_eq!(DualAccum::LastNegative.eval(&[2, -4, -1, 5]), Some(-1));
         assert_eq!(KClosed::CountLtK.eval(&[1, 5, 3, 2], 3), Some(2));
         assert_eq!(KClosed::SumEqK.eval(&[2, 5, 2, 2], 2), Some(6));
+        assert_eq!(IndexScan::ArgMaxAbs.eval(&[1, -9, 3]), Some(1));
+        assert_eq!(IndexScan::ArgMaxAbs.eval(&[-2, 5, -8]), Some(2));
     }
 }

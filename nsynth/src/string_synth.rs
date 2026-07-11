@@ -1486,9 +1486,10 @@ fn verify_str_int(code: &str, examples: &[(String, i64)]) -> bool {
     crate::runtime::code_reproduces_examples(code, &bench)
 }
 
-/// Synthesize a `string -> int` aggregation (char count / word count) from single
-/// string-arg examples. Returns a SELF-VERIFIED Mog program or None. Never-wrong: a
-/// candidate is only returned if it reproduces every example via the interpreter.
+/// Synthesize a `string -> int` aggregation (char count / word count / …) from
+/// single string-arg examples. Returns a SELF-VERIFIED Mog program or None.
+/// Never-wrong: a candidate is only returned if it reproduces every example via
+/// the interpreter.
 pub fn synthesize_string_int_program(
     params: &[String],
     examples: &[(String, i64)],
@@ -1505,6 +1506,66 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Digit count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_digit()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Uppercase letter count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_uppercase()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"A\" {{\n\
+            if c <= \"Z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-upper_count".to_string(),
                 error: None,
             });
         }
@@ -1537,6 +1598,87 @@ pub fn synthesize_string_int_program(
                     success: true,
                     code,
                     method: "str-word_count".to_string(),
+                    error: None,
+                });
+            }
+        }
+    }
+    // Longest / shortest word length (nonempty words).
+    for sep in [" ", "-", "_", ",", "/"] {
+        let nontrivial = examples
+            .iter()
+            .any(|(s, _)| nonempty_split_count(s, sep) >= 2);
+        if !nontrivial {
+            continue;
+        }
+        let longest_ok = examples.iter().all(|(s, o)| {
+            let lens: Vec<i64> = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .collect();
+            lens.iter().copied().max().unwrap_or(0) == *o
+        });
+        if longest_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    best: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            if w.len > best {{\n\
+                best = w.len;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-longest_word_len".to_string(),
+                    error: None,
+                });
+            }
+        }
+        let shortest_ok = examples.iter().all(|(s, o)| {
+            let lens: Vec<i64> = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .collect();
+            lens.iter().copied().min().unwrap_or(0) == *o
+        });
+        if shortest_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            if found == 0 {{\n\
+                best = w.len;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if w.len < best {{\n\
+                    best = w.len;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-shortest_word_len".to_string(),
                     error: None,
                 });
             }

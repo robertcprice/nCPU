@@ -671,6 +671,17 @@ fn index_min_odd(arr: &[i64]) -> Option<i64> {
     best
 }
 
+fn index_argmax_abs(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best_i = 0usize;
+    let mut best_abs = arr[0].abs();
+    for i in 1..arr.len() {
+        let a = arr[i].abs();
+        if a > best_abs { best_abs = a; best_i = i; }
+    }
+    Some(best_i as i64)
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -855,6 +866,7 @@ mod tests {
         assert_eq!(index_second_last(&[10, 20, 30]), Some(20));
         assert_eq!(index_max_even(&[1, 9, 3, 8, 2]), Some(3));
         assert_eq!(index_min_odd(&[1, 9, 3, 2]), Some(2));
+        assert_eq!(index_argmax_abs(&[1, -9, 3]), Some(1));
         assert_eq!(k_count_eq(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
         assert_eq!(k_count_gt(&[1, 5, 3, 2], 2), 2);
@@ -1002,6 +1014,22 @@ fn drop_last_two(s: &str, sep: &str) -> String {
     if words.len() <= 2 { String::new() } else { words[..words.len()-2].join(sep) }
 }
 
+fn digit_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_digit()).count() as i64
+}
+
+fn upper_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_uppercase()).count() as i64
+}
+
+fn longest_word_len(s: &str, sep: &str) -> i64 {
+    s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
+}
+
+fn shortest_word_len(s: &str, sep: &str) -> i64 {
+    s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).min().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,6 +1056,10 @@ mod tests {
         assert_eq!(drop_first_two("one two three four", " "), "three four");
         assert_eq!(take_last_two("one two three four", " "), "three four");
         assert_eq!(drop_last_two("one two three four", " "), "one two");
+        assert_eq!(digit_count("a1b22"), 3);
+        assert_eq!(upper_count("Hi There"), 2);
+        assert_eq!(longest_word_len("a to moon", " "), 4);
+        assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
 }
 EOF
