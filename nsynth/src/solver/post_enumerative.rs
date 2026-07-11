@@ -14,8 +14,8 @@ use crate::synthesis;
 
 use super::routing::{
     default_post_enumerative_routes, defer_unbounded_training_routes, post_enumerative_context,
-    recommended_post_enumerative_routes,
-    route_is_applicable, PostEnumerativeContext, ROUTE_ARRAY_GRADIENT,
+    recommended_post_enumerative_routes, route_is_applicable, route_is_unbounded_training,
+    PostEnumerativeContext, ROUTE_ARRAY_GRADIENT,
     ROUTE_ARRAY_REFERENCE_DISTILLATION, ROUTE_BRIDGE_GRADIENT, ROUTE_EXPR_ONLY,
     ROUTE_EXPR_TEMPLATES, ROUTE_NATIVE_REFERENCE_DISTILLATION, ROUTE_REFERENCE_DISTILLATION,
     ROUTE_REGISTER_MACHINE, ROUTE_SCALAR_GRADIENT, ROUTE_SCALAR_TEMPLATES, ROUTE_SEARCH,
@@ -346,25 +346,19 @@ fn try_post_enumerative_route(
     if super::analogy::in_refit() && matches!(route, ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT) {
         return None;
     }
-    // Global solve-budget guard. The gradient + register-machine routes have NO
-    // internal wall-clock bound — their training runs on worker threads that do not
-    // inherit the thread-local train deadline, so one route can spin ~60s on data
-    // that never converges (measured: synthesize_gradient_only 61s, register_machine
-    // 24s on nth_composite), blowing far past a set budget. When a global
-    // NSYNTH_SOLVE_BUDGET_MS is set and ALREADY exhausted (an earlier route overran),
-    // skip these expensive routes so the solve degrades gracefully instead of
-    // cascading minutes of doomed search. Opt-in: with no budget set this is a no-op,
-    // so default behaviour (and the benchmark) is unchanged; it never skips a route
-    // reached while still within budget, so a legitimate gradient solve is preserved.
-    if matches!(
-        route,
-        ROUTE_SCALAR_GRADIENT
-            | ROUTE_ARRAY_GRADIENT
-            | ROUTE_REGISTER_MACHINE
-            | ROUTE_UNIVERSAL
-            | ROUTE_BRIDGE_GRADIENT
-    ) && global_solve_budget_exhausted(t0)
-    {
+    // Global solve-budget guard. The unbounded TRAINING routes have NO internal wall-clock bound —
+    // their training runs on worker threads that do not inherit the thread-local train deadline, so one
+    // route can spin ~60s on data that never converges (measured: synthesize_gradient_only 61s,
+    // register_machine 24s on nth_composite, and expr_only 87s on absval), blowing far past a set
+    // budget. When a global NSYNTH_SOLVE_BUDGET_MS is set and ALREADY exhausted (an earlier route
+    // overran), skip these expensive routes so the solve degrades gracefully instead of cascading
+    // minutes of doomed search. Opt-in: with no budget set this is a no-op, so default behaviour (and
+    // the benchmark) is unchanged; it never skips a route reached while still within budget, so a
+    // legitimate training solve is preserved. Uses `route_is_unbounded_training` — the SAME classifier
+    // the portfolio ordering defers behind cheap routes — so the guard covers `expr_only` too, which
+    // the earlier hand-listed set (gradient/register/universal only) missed, letting an 87s expr_only
+    // run even after the budget was spent.
+    if route_is_unbounded_training(route) && global_solve_budget_exhausted(t0) {
         return None;
     }
 
