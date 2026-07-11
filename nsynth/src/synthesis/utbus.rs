@@ -1117,6 +1117,10 @@ enum DualAccum {
     MeanFourthPowersEvenNonZeroTrunc,
     /// Truncating mean of fourth powers of odd-valued non-zero elements (none → 0).
     MeanFourthPowersOddNonZeroTrunc,
+    /// Sum of fifth powers of even-valued non-zero elements.
+    SumFifthPowersEvenNonZero,
+    /// Sum of fifth powers of odd-valued non-zero elements.
+    SumFifthPowersOddNonZero,
 }
 
 impl DualAccum {
@@ -1328,6 +1332,8 @@ impl DualAccum {
             DualAccum::ProductFourthPowersOddNonZero => "product_fourth_powers_odd_non_zero",
             DualAccum::MeanFourthPowersEvenNonZeroTrunc => "mean_fourth_powers_even_non_zero_trunc",
             DualAccum::MeanFourthPowersOddNonZeroTrunc => "mean_fourth_powers_odd_non_zero_trunc",
+            DualAccum::SumFifthPowersEvenNonZero => "sum_fifth_powers_even_non_zero",
+            DualAccum::SumFifthPowersOddNonZero => "sum_fifth_powers_odd_non_zero",
         }
     }
 
@@ -1413,6 +1419,8 @@ impl DualAccum {
                 | DualAccum::SumFourthPowersOddNonZero
                 | DualAccum::MeanFourthPowersEvenNonZeroTrunc
                 | DualAccum::MeanFourthPowersOddNonZeroTrunc
+                | DualAccum::SumFifthPowersEvenNonZero
+                | DualAccum::SumFifthPowersOddNonZero
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -3044,6 +3052,24 @@ impl DualAccum {
                     Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
                 }
             }
+            DualAccum::SumFifthPowersEvenNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(x)
+                    })
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumFifthPowersOddNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(x)
+                    })
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -5979,6 +6005,34 @@ DualAccum::SumSquaresOdds => format!(
     return total / n;\n\
 }}\n"
             ),
+            DualAccum::SumFifthPowersEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumFifthPowersOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7142,6 +7196,8 @@ fn try_dual_and_pairwise(
         DualAccum::ProductFourthPowersOddNonZero,
         DualAccum::MeanFourthPowersEvenNonZeroTrunc,
         DualAccum::MeanFourthPowersOddNonZeroTrunc,
+        DualAccum::SumFifthPowersEvenNonZero,
+        DualAccum::SumFifthPowersOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -9689,6 +9745,8 @@ enum KClosed {
     ProductNonZeroDivisibleByK,
     /// Max of non-zero elements divisible by k (none → 0; k == 0 → None).
     MaxNonZeroDivisibleByK,
+    /// Min of non-zero elements divisible by k (none → 0; k == 0 → None).
+    MinNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -9814,6 +9872,7 @@ impl KClosed {
             KClosed::SumNonZeroDivisibleByK => "sum_non_zero_divisible_by_k",
             KClosed::ProductNonZeroDivisibleByK => "product_non_zero_divisible_by_k",
             KClosed::MaxNonZeroDivisibleByK => "max_non_zero_divisible_by_k",
+            KClosed::MinNonZeroDivisibleByK => "min_non_zero_divisible_by_k",
         }
     }
 
@@ -10789,6 +10848,18 @@ impl KClosed {
                 for &v in arr {
                     if v != 0 && v % k == 0 {
                         best = Some(best.map_or(v, |b| b.max(v)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            KClosed::MinNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut best: Option<i64> = None;
+                for &v in arr {
+                    if v != 0 && v % k == 0 {
+                        best = Some(best.map_or(v, |b| b.min(v)));
                     }
                 }
                 Some(best.unwrap_or(0))
@@ -12530,6 +12601,26 @@ KClosed::MinWhereAbsNeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::MinNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                if found == 0 {{\n\
+                    best = item;\n\
+                    found = 1;\n\
+                }}\n\
+                if item < best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
 
         }
     }
@@ -12663,6 +12754,7 @@ fn try_k_closed(
         KClosed::SumNonZeroDivisibleByK,
         KClosed::ProductNonZeroDivisibleByK,
         KClosed::MaxNonZeroDivisibleByK,
+        KClosed::MinNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -14065,5 +14157,9 @@ mod tests {
         assert_eq!(DualAccum::MeanFourthPowersOddNonZeroTrunc.eval(&[0, -3, 1, 2]), Some(41));
         assert_eq!(DualAccum::MeanFourthPowersEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::MaxNonZeroDivisibleByK.eval(&[0, 4, 6, 3], 2), Some(6));
+        assert_eq!(DualAccum::SumFifthPowersEvenNonZero.eval(&[0, -2, 2, 3]), Some(0));
+        assert_eq!(DualAccum::SumFifthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(-242));
+        assert_eq!(DualAccum::SumFifthPowersEvenNonZero.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::MinNonZeroDivisibleByK.eval(&[-8, 0, 4, 6], 2), Some(-8));
     }
 }
