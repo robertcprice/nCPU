@@ -730,6 +730,10 @@ enum WordShape {
     TakeFirstTwo,
     /// Drop the first two words, rejoin.
     DropFirstTwo,
+    /// Keep only the last two words.
+    TakeLastTwo,
+    /// Drop the last two words, rejoin.
+    DropLastTwo,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -763,6 +767,8 @@ impl WordShape {
             WordShape::SortByLen => "sort_by_len",
             WordShape::TakeFirstTwo => "take_first_two",
             WordShape::DropFirstTwo => "drop_first_two",
+            WordShape::TakeLastTwo => "take_last_two",
+            WordShape::DropLastTwo => "drop_last_two",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -928,6 +934,20 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[2..].join(sep)
             }
         }
+        WordShape::TakeLastTwo => {
+            if words.len() <= 2 {
+                words.join(sep)
+            } else {
+                words[words.len() - 2..].join(sep)
+            }
+        }
+        WordShape::DropLastTwo => {
+            if words.len() <= 2 {
+                String::new()
+            } else {
+                words[..words.len() - 2].join(sep)
+            }
+        }
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1019,6 +1039,12 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::DropFirstTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 2;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::TakeLastTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 2 {{\n        start = words.len - 2;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropLastTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 2 {{\n        end = end - 2;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1049,7 +1075,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 26] = [
+    const SHAPES: [WordShape; 28] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1074,6 +1100,8 @@ pub fn synthesize_word_program(
         WordShape::SortByLen,
         WordShape::TakeFirstTwo,
         WordShape::DropFirstTwo,
+        WordShape::TakeLastTwo,
+        WordShape::DropLastTwo,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];

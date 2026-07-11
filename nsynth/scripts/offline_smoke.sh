@@ -362,6 +362,11 @@ fn dual_first_negative(arr: &[i64]) -> i64 {
     0
 }
 
+fn dual_last_negative(arr: &[i64]) -> i64 {
+    for &x in arr.iter().rev() { if x < 0 { return x; } }
+    0
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -682,6 +687,14 @@ fn k_sum_lt(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v < k).copied().sum()
 }
 
+fn k_count_lt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v < k).count() as i64
+}
+
+fn k_sum_eq(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v == k).copied().sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,6 +845,7 @@ mod tests {
         assert_eq!(dual_first_positive(&[-2, 0, 5, 3]), 5);
         assert_eq!(dual_last_positive(&[-2, 0, 5, 3]), 3);
         assert_eq!(dual_first_negative(&[2, -4, -1]), -4);
+        assert_eq!(dual_last_negative(&[2, -4, -1, 5]), -1);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -845,6 +859,8 @@ mod tests {
         assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
         assert_eq!(k_count_gt(&[1, 5, 3, 2], 2), 2);
         assert_eq!(k_sum_lt(&[1, 5, 3, 2], 3), 3);
+        assert_eq!(k_count_lt(&[1, 5, 3, 2], 3), 2);
+        assert_eq!(k_sum_eq(&[2, 5, 2, 2], 2), 6);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -976,6 +992,16 @@ fn drop_first_two(s: &str, sep: &str) -> String {
     if words.len() <= 2 { String::new() } else { words[2..].join(sep) }
 }
 
+fn take_last_two(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 2 { words.join(sep) } else { words[words.len()-2..].join(sep) }
+}
+
+fn drop_last_two(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 2 { String::new() } else { words[..words.len()-2].join(sep) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1000,6 +1026,8 @@ mod tests {
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
         assert_eq!(drop_first_two("one two three four", " "), "three four");
+        assert_eq!(take_last_two("one two three four", " "), "three four");
+        assert_eq!(drop_last_two("one two three four", " "), "one two");
     }
 }
 EOF
