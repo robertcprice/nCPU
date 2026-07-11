@@ -650,6 +650,28 @@ fn enumerate_array_programs(include_k_preds: bool) -> Vec<ArrayProgram> {
     programs
 }
 
+/// Euclidean GCD on non-negative ints (Mog `%` matches rem toward zero for ≥0).
+fn i64_gcd(mut a: i64, mut b: i64) -> i64 {
+    a = a.abs();
+    b = b.abs();
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn i64_lcm(a: i64, b: i64) -> Option<i64> {
+    let g = i64_gcd(a, b);
+    if g == 0 {
+        return Some(0);
+    }
+    let aa = a.abs();
+    let bb = b.abs();
+    aa.checked_div(g)?.checked_mul(bb)
+}
+
 /// Pull observable `[i64]` inputs (+ optional scalar `k`) out of the examples.
 fn array_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<Option<i64>>)> {
     let mut inputs = Vec::new();
@@ -699,6 +721,10 @@ enum DualAccum {
     MinSubarraySum,
     /// Sort ascending, return `sorted[len/2]` (upper-middle for even length).
     Median,
+    /// GCD of all elements (abs values; empty → None).
+    GcdAll,
+    /// LCM of all elements (abs; empty → None; overflow → None).
+    LcmAll,
 }
 
 impl DualAccum {
@@ -713,6 +739,8 @@ impl DualAccum {
             DualAccum::MaxSubarraySum => "max_subarray_sum",
             DualAccum::MinSubarraySum => "min_subarray_sum",
             DualAccum::Median => "median",
+            DualAccum::GcdAll => "gcd_all",
+            DualAccum::LcmAll => "lcm_all",
         }
     }
 
@@ -831,6 +859,23 @@ impl DualAccum {
                 let mut sorted = arr.to_vec();
                 sorted.sort_unstable();
                 Some(sorted[sorted.len() / 2])
+            }
+            DualAccum::GcdAll => {
+                let mut g = arr[0].abs();
+                for &x in &arr[1..] {
+                    g = i64_gcd(g, x);
+                    if g == 1 {
+                        break;
+                    }
+                }
+                Some(g)
+            }
+            DualAccum::LcmAll => {
+                let mut l = arr[0].abs();
+                for &x in &arr[1..] {
+                    l = i64_lcm(l, x)?;
+                }
+                Some(l)
             }
         }
     }
@@ -954,6 +999,49 @@ impl DualAccum {
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     arr.sort();\n\
     return arr[arr.len / 2];\n\
+}}\n"
+            ),
+            DualAccum::GcdAll => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    g: i64 = arr[0];\n\
+    if g < 0 {{ g = 0 - g; }}\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = g;\n\
+        b: i64 = arr[i];\n\
+        if b < 0 {{ b = 0 - b; }}\n\
+        while b != 0 {{\n\
+            t: i64 = b;\n\
+            b = a % b;\n\
+            a = t;\n\
+        }}\n\
+        g = a;\n\
+        i = i + 1;\n\
+    }}\n\
+    return g;\n\
+}}\n"
+            ),
+            DualAccum::LcmAll => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    l: i64 = arr[0];\n\
+    if l < 0 {{ l = 0 - l; }}\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = l;\n\
+        b: i64 = arr[i];\n\
+        if b < 0 {{ b = 0 - b; }}\n\
+        x: i64 = a;\n\
+        y: i64 = b;\n\
+        while y != 0 {{\n\
+            t: i64 = y;\n\
+            y = x % y;\n\
+            x = t;\n\
+        }}\n\
+        g: i64 = x;\n\
+        l = (a / g) * b;\n\
+        i = i + 1;\n\
+    }}\n\
+    return l;\n\
 }}\n"
             ),
         }
@@ -1276,6 +1364,8 @@ fn try_dual_and_pairwise(
         DualAccum::MaxSubarraySum,
         DualAccum::MinSubarraySum,
         DualAccum::Median,
+        DualAccum::GcdAll,
+        DualAccum::LcmAll,
     ] {
         let ok = inputs
             .iter()
@@ -2634,5 +2724,9 @@ mod tests {
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 2], 9), Some(-1));
         assert_eq!(DualAccum::Median.eval(&[1, 100, 2]), Some(2));
         assert_eq!(DualAccum::Median.eval(&[10, 1, 5, 0]), Some(5));
+        assert_eq!(DualAccum::GcdAll.eval(&[12, 18, 30]), Some(6));
+        assert_eq!(DualAccum::GcdAll.eval(&[7, 14, 21]), Some(7));
+        assert_eq!(DualAccum::LcmAll.eval(&[2, 3, 4]), Some(12));
+        assert_eq!(DualAccum::LcmAll.eval(&[6, 9]), Some(18));
     }
 }

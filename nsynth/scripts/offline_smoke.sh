@@ -208,6 +208,28 @@ fn dual_median(arr: &[i64]) -> Option<i64> {
     Some(s[s.len() / 2])
 }
 
+fn i64_gcd(mut a: i64, mut b: i64) -> i64 {
+    a = a.abs(); b = b.abs();
+    while b != 0 { let t = b; b = a % b; a = t; }
+    a
+}
+
+fn dual_gcd_all(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    Some(arr.iter().copied().fold(arr[0].abs(), i64_gcd))
+}
+
+fn dual_lcm_all(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut l = arr[0].abs();
+    for &x in &arr[1..] {
+        let g = i64_gcd(l, x);
+        if g == 0 { return Some(0); }
+        l = (l / g).checked_mul(x.abs())?;
+    }
+    Some(l)
+}
+
 fn dual_second_min(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut first = arr[0];
@@ -460,6 +482,8 @@ mod tests {
         assert_eq!(dual_min_subarray(&[1, -2, 3, -4]), Some(-4));
         assert_eq!(dual_median(&[1, 100, 2]), Some(2));
         assert_eq!(dual_median(&[10, 1, 5, 0]), Some(5));
+        assert_eq!(dual_gcd_all(&[12, 18, 30]), Some(6));
+        assert_eq!(dual_lcm_all(&[2, 3, 4]), Some(12));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);
