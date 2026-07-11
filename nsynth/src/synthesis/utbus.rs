@@ -1137,6 +1137,10 @@ enum DualAccum {
     ProductSixthPowersEvenNonZero,
     /// Product of sixth powers of odd-valued non-zero elements (none → 1).
     ProductSixthPowersOddNonZero,
+    /// Truncating mean of sixth powers of even-valued non-zero elements (none → 0).
+    MeanSixthPowersEvenNonZeroTrunc,
+    /// Truncating mean of sixth powers of odd-valued non-zero elements (none → 0).
+    MeanSixthPowersOddNonZeroTrunc,
 }
 
 impl DualAccum {
@@ -1358,6 +1362,8 @@ impl DualAccum {
             DualAccum::SumSixthPowersOddNonZero => "sum_sixth_powers_odd_non_zero",
             DualAccum::ProductSixthPowersEvenNonZero => "product_sixth_powers_even_non_zero",
             DualAccum::ProductSixthPowersOddNonZero => "product_sixth_powers_odd_non_zero",
+            DualAccum::MeanSixthPowersEvenNonZeroTrunc => "mean_sixth_powers_even_non_zero_trunc",
+            DualAccum::MeanSixthPowersOddNonZeroTrunc => "mean_sixth_powers_odd_non_zero_trunc",
         }
     }
 
@@ -1449,6 +1455,8 @@ impl DualAccum {
                 | DualAccum::MeanFifthPowersOddNonZeroTrunc
                 | DualAccum::SumSixthPowersEvenNonZero
                 | DualAccum::SumSixthPowersOddNonZero
+                | DualAccum::MeanSixthPowersEvenNonZeroTrunc
+                | DualAccum::MeanSixthPowersOddNonZeroTrunc
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -3188,6 +3196,38 @@ impl DualAccum {
                     })
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanSixthPowersEvenNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 == 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(s)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
+            DualAccum::MeanSixthPowersOddNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 != 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(s)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
         }
     }
 
@@ -6273,6 +6313,44 @@ DualAccum::SumSquaresOdds => format!(
     return prod;\n\
 }}\n"
             ),
+            DualAccum::MeanSixthPowersEvenNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq * sq;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
+            DualAccum::MeanSixthPowersOddNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                total = total + sq * sq * sq;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7446,6 +7524,8 @@ fn try_dual_and_pairwise(
         DualAccum::SumSixthPowersOddNonZero,
         DualAccum::ProductSixthPowersEvenNonZero,
         DualAccum::ProductSixthPowersOddNonZero,
+        DualAccum::MeanSixthPowersEvenNonZeroTrunc,
+        DualAccum::MeanSixthPowersOddNonZeroTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -10003,6 +10083,8 @@ enum KClosed {
     AbsSumNonZeroDivisibleByK,
     /// Product of |v| for non-zero elements divisible by k (none → 1; k == 0 → None).
     AbsProductNonZeroDivisibleByK,
+    /// Truncating mean of non-zero elements divisible by k (none → 0; k == 0 → None).
+    MeanNonZeroDivisibleByKTrunc,
 }
 
 impl KClosed {
@@ -10133,6 +10215,7 @@ impl KClosed {
             KClosed::LastNonZeroDivisibleByK => "last_non_zero_divisible_by_k",
             KClosed::AbsSumNonZeroDivisibleByK => "abs_sum_non_zero_divisible_by_k",
             KClosed::AbsProductNonZeroDivisibleByK => "abs_product_non_zero_divisible_by_k",
+            KClosed::MeanNonZeroDivisibleByKTrunc => "mean_non_zero_divisible_by_k_trunc",
         }
     }
 
@@ -11167,6 +11250,21 @@ impl KClosed {
                         .map(|&v| v.abs())
                         .fold(1i64, |a, b| a.saturating_mul(b)),
                 )
+            }
+            KClosed::MeanNonZeroDivisibleByKTrunc => {
+                if k == 0 {
+                    return None;
+                }
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&v| v != 0 && v % k == 0)
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
             }
         }
     }
@@ -12982,6 +13080,24 @@ KClosed::MinWhereAbsNeK => format!(
     return prod;\n\
 }}\n"
             ),
+            KClosed::MeanNonZeroDivisibleByKTrunc => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                total = total + item;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
 
         }
     }
@@ -13120,6 +13236,7 @@ fn try_k_closed(
         KClosed::LastNonZeroDivisibleByK,
         KClosed::AbsSumNonZeroDivisibleByK,
         KClosed::AbsProductNonZeroDivisibleByK,
+        KClosed::MeanNonZeroDivisibleByKTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -14542,5 +14659,9 @@ mod tests {
         assert_eq!(DualAccum::ProductSixthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(729));
         assert_eq!(DualAccum::ProductSixthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
         assert_eq!(KClosed::AbsProductNonZeroDivisibleByK.eval(&[0, -4, 6, 3], 2), Some(24));
+        assert_eq!(DualAccum::MeanSixthPowersEvenNonZeroTrunc.eval(&[0, -2, 2, 3]), Some(64));
+        assert_eq!(DualAccum::MeanSixthPowersOddNonZeroTrunc.eval(&[0, -3, 1, 2]), Some(365));
+        assert_eq!(DualAccum::MeanSixthPowersEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::MeanNonZeroDivisibleByKTrunc.eval(&[0, -4, 6, 3], 2), Some(1));
     }
 }
