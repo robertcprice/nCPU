@@ -885,6 +885,10 @@ enum DualAccum {
     SumSquaresEvens,
     /// Sum of x*x for odd-valued elements.
     SumSquaresOdds,
+    /// Sum of x^3 for even-valued elements.
+    SumCubesEvens,
+    /// Sum of x^3 for odd-valued elements.
+    SumCubesOdds,
 }
 
 impl DualAccum {
@@ -980,6 +984,8 @@ impl DualAccum {
             DualAccum::OrAbsOdds => "or_abs_odds",
             DualAccum::SumSquaresEvens => "sum_squares_evens",
             DualAccum::SumSquaresOdds => "sum_squares_odds",
+            DualAccum::SumCubesEvens => "sum_cubes_evens",
+            DualAccum::SumCubesOdds => "sum_cubes_odds",
         }
     }
 
@@ -1026,6 +1032,8 @@ impl DualAccum {
                 | DualAccum::OrAbsOdds
                 | DualAccum::SumSquaresEvens
                 | DualAccum::SumSquaresOdds
+                | DualAccum::SumCubesEvens
+                | DualAccum::SumCubesOdds
                 | DualAccum::SumSquares
                 | DualAccum::AbsSum
                 | DualAccum::MaxAbs
@@ -1674,6 +1682,18 @@ impl DualAccum {
                 arr.iter()
                     .filter(|&&x| x % 2 != 0)
                     .map(|&x| x.saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumCubesEvens => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0)
+                    .map(|&x| x.saturating_mul(x).saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumCubesOdds => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0)
+                    .map(|&x| x.saturating_mul(x).saturating_mul(x))
                     .fold(0i64, i64::saturating_add),
             ),
         }
@@ -2765,6 +2785,8 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+
+
         }
     }
 }
@@ -3811,6 +3833,8 @@ fn try_dual_and_pairwise(
         DualAccum::OrAbsOdds,
         DualAccum::SumSquaresEvens,
         DualAccum::SumSquaresOdds,
+        DualAccum::SumCubesEvens,
+        DualAccum::SumCubesOdds,
     ] {
         let ok = inputs
             .iter()
@@ -6242,6 +6266,8 @@ enum KClosed {
     MaxWhereAbsNeK,
     /// Min among elements with |v| != k (none → 0).
     MinWhereAbsNeK,
+    /// Sum of elements with |v| > k.
+    SumWhereAbsGtK,
 }
 
 impl KClosed {
@@ -6309,6 +6335,7 @@ impl KClosed {
             KClosed::ProductWhereAbsNeK => "product_where_abs_ne_k",
             KClosed::MaxWhereAbsNeK => "max_where_abs_ne_k",
             KClosed::MinWhereAbsNeK => "min_where_abs_ne_k",
+            KClosed::SumWhereAbsGtK => "sum_where_abs_gt_k",
         }
     }
 
@@ -6762,6 +6789,12 @@ impl KClosed {
                 }
                 Some(best)
             }
+            KClosed::SumWhereAbsGtK => Some(
+                arr.iter()
+                    .filter(|&&v| v.abs() > k)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -7597,6 +7630,19 @@ KClosed::MinWhereAbsNeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::SumWhereAbsGtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a > k {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -7671,6 +7717,7 @@ fn try_k_closed(
         KClosed::ProductWhereAbsNeK,
         KClosed::MaxWhereAbsNeK,
         KClosed::MinWhereAbsNeK,
+        KClosed::SumWhereAbsGtK,
     ] {
         let ok = inputs
             .iter()
@@ -8866,5 +8913,8 @@ mod tests {
         assert_eq!(DualAccum::SumSquaresEvens.eval(&[-4, 3, 2]), Some(20));
         assert_eq!(DualAccum::SumSquaresOdds.eval(&[-4, 3, 2]), Some(9));
         assert_eq!(KClosed::MinWhereAbsNeK.eval(&[5, -5, 2], 5), Some(2));
+        assert_eq!(DualAccum::SumCubesEvens.eval(&[-4, 3, 2]), Some(-56));
+        assert_eq!(DualAccum::SumCubesOdds.eval(&[-4, 3, 2]), Some(27));
+        assert_eq!(KClosed::SumWhereAbsGtK.eval(&[-5, 2, 4], 2), Some(-1));
     }
 }
