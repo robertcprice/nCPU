@@ -427,6 +427,16 @@ where
     F: Fn(&[f32], f32) -> f32,
     G: Fn(&[f32], &str, &[&str]) -> String,
 {
+    // Once the caller's wall-clock budget is spent there is nothing to gain — bail before the initial
+    // `try_emit_verify`. That verify is a full strict-verify (examples + robustness probes) and runs
+    // UNCONDITIONALLY at the top of every call, BEFORE the step loop's own `step % 16` deadline check;
+    // the restart×architecture sweep queues ~30 `train_program` calls, so a deadline hit mid-sweep still
+    // paid ~1s of initial verify per remaining call — the measured 8s-budget → 49s-actual overshoot on
+    // `absval`'s scalar-gradient route. Returning here collapses that tail to ~0. No-op when no
+    // `TrainDeadline` is installed (benchmark path byte-identical).
+    if train_deadline_exceeded() {
+        return None;
+    }
     // Try the initial params directly (may already be correct after good init)
     if let Some(result) = try_emit_verify(&initial_params, &emit_fn, problem, fn_name, param_names)
     {
@@ -509,4 +519,79 @@ pub(crate) fn pseudo_rand(seed: u64) -> f32 {
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     ((x >> 33) as f32) / (u32::MAX as f32)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::benchmark::{Example, Problem, Value};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    /// Once the installed `TrainDeadline` is already spent, `train_program` must return immediately
+    /// WITHOUT running the initial `try_emit_verify` (a full strict-verify) — that per-call verify, run
+    /// before the step loop's own deadline check, was the 8s-budget → 49s-actual overshoot on the scalar
+    /// gradient sweep (~30 queued calls each paying ~1s after the budget elapsed).
+    #[test]
+    fn train_program_does_no_work_once_the_deadline_is_spent() {
+        let problem = Problem {
+            name: "f".into(),
+            examples: vec![Example {
+                inputs: vec![Value::Int(2)],
+                expected: Value::Int(2),
+            }],
+            ..Default::default()
+        };
+        let emit_calls = Cell::new(0u32);
+        let loss_calls = Cell::new(0u32);
+        // A deadline of 0ms is already in the past by the time train_program checks it.
+        let _dl = TrainDeadline::set(Duration::from_millis(0));
+        let result = train_program(
+            vec![0.0],
+            |_p, _t| {
+                loss_calls.set(loss_calls.get() + 1);
+                0.0
+            },
+            |_p, _n, _pn| {
+                emit_calls.set(emit_calls.get() + 1);
+                String::new()
+            },
+            &problem,
+            &["a"],
+            "f",
+            800,
+        );
+        assert!(result.is_none(), "a past-deadline run must miss");
+        assert_eq!(emit_calls.get(), 0, "no emit/verify work once the budget is spent");
+        assert_eq!(loss_calls.get(), 0, "no gradient steps once the budget is spent");
+    }
+
+    /// Control: with NO deadline installed the same call DOES do work (the guard is opt-in, so the
+    /// benchmark/default path is unaffected).
+    #[test]
+    fn train_program_runs_when_no_deadline_is_installed() {
+        let problem = Problem {
+            name: "f".into(),
+            examples: vec![Example {
+                inputs: vec![Value::Int(2)],
+                expected: Value::Int(5),
+            }],
+            ..Default::default()
+        };
+        let emit_calls = Cell::new(0u32);
+        // No TrainDeadline set -> train_deadline_exceeded() is false.
+        let _ = train_program(
+            vec![0.0],
+            |_p, _t| 1.0,
+            |_p, _n, _pn| {
+                emit_calls.set(emit_calls.get() + 1);
+                "fn f(a: i64) -> i64 { a }".to_string()
+            },
+            &problem,
+            &["a"],
+            "f",
+            4,
+        );
+        assert!(emit_calls.get() >= 1, "with no deadline, the initial verify runs");
+    }
 }
