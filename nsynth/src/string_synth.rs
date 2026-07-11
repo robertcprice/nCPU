@@ -792,6 +792,8 @@ enum WordShape {
     FourthWord,
     /// Keep only the fifth word (index 4), else empty.
     FifthWord,
+    /// Duplicate the first word at the front.
+    DuplicateFirstWord,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -856,6 +858,7 @@ impl WordShape {
             WordShape::ConcatWords => "concat_words",
             WordShape::FourthWord => "fourth_word",
             WordShape::FifthWord => "fifth_word",
+            WordShape::DuplicateFirstWord => "duplicate_first_word",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1193,6 +1196,15 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ConcatWords => words.join(""),
         WordShape::FourthWord => words.get(3).unwrap_or(&"").to_string(),
         WordShape::FifthWord => words.get(4).unwrap_or(&"").to_string(),
+        WordShape::DuplicateFirstWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out = vec![words[0].to_string()];
+                out.extend(words.iter().map(|w| (*w).to_string()));
+                out.join(sep)
+            }
+        }
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1377,7 +1389,10 @@ WordShape::CapLastWord => format!(
         WordShape::FifthWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 5 {{\n        return \"\";\n    }}\n    return words[4];\n}}\n"
         ),
-        WordShape::UpperEachWord => format!(
+                WordShape::DuplicateFirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    out.push(words[0]);\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::LowerEachWord => format!(
@@ -1407,7 +1422,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 57] = [
+    const SHAPES: [WordShape; 58] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1463,6 +1478,7 @@ pub fn synthesize_word_program(
         WordShape::ConcatWords,
         WordShape::FourthWord,
         WordShape::FifthWord,
+        WordShape::DuplicateFirstWord,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2831,6 +2847,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-star_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Plus-sign count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '+').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"+\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-plus_count".to_string(),
                 error: None,
             });
         }
