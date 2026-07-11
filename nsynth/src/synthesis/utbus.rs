@@ -1073,6 +1073,10 @@ enum DualAccum {
     GcdAbsEvenNonZero,
     /// GCD of abs of odd-valued non-zero elements (none → 0).
     GcdAbsOddNonZero,
+    /// LCM of abs of even-valued non-zero elements (none → 1).
+    LcmAbsEvenNonZero,
+    /// LCM of abs of odd-valued non-zero elements (none → 1).
+    LcmAbsOddNonZero,
 }
 
 impl DualAccum {
@@ -1262,6 +1266,8 @@ impl DualAccum {
             DualAccum::ProductAbsOddNonZero => "product_abs_odd_non_zero",
             DualAccum::GcdAbsEvenNonZero => "gcd_abs_even_non_zero",
             DualAccum::GcdAbsOddNonZero => "gcd_abs_odd_non_zero",
+            DualAccum::LcmAbsEvenNonZero => "lcm_abs_even_non_zero",
+            DualAccum::LcmAbsOddNonZero => "lcm_abs_odd_non_zero",
         }
     }
 
@@ -1414,7 +1420,9 @@ impl DualAccum {
                 | DualAccum::ProductNonZeroEvens
                 | DualAccum::ProductNonZeroOdds
                 | DualAccum::ProductAbsEvenNonZero
-                | DualAccum::ProductAbsOddNonZero => Some(1),
+                | DualAccum::ProductAbsOddNonZero
+                | DualAccum::LcmAbsEvenNonZero
+                | DualAccum::LcmAbsOddNonZero => Some(1),
                 DualAccum::SumCubes
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
@@ -2753,6 +2761,26 @@ impl DualAccum {
                     }
                 }
                 Some(g.unwrap_or(0))
+            }
+            DualAccum::LcmAbsEvenNonZero => {
+                let mut l: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 == 0 && x != 0 {
+                        let a = x.abs();
+                        l = Some(l.map_or(a, |l| i64_lcm(l, a)));
+                    }
+                }
+                Some(l.unwrap_or(1))
+            }
+            DualAccum::LcmAbsOddNonZero => {
+                let mut l: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 != 0 && x != 0 {
+                        let a = x.abs();
+                        l = Some(l.map_or(a, |l| i64_lcm(l, a)));
+                    }
+                }
+                Some(l.unwrap_or(1))
             }
         }
     }
@@ -5300,6 +5328,63 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
+            DualAccum::LcmAbsEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    found: i64 = 0;\n\
+    l: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                if found == 0 {{\n\
+                    l = a;\n\
+                    found = 1;\n\
+                }} else {{\n\
+                    g: i64 = l;\n\
+                    b: i64 = a;\n\
+                    while b != 0 {{\n\
+                        t: i64 = b;\n\
+                        b = g % b;\n\
+                        g = t;\n\
+                    }}\n\
+                    l = (l / g) * a;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return l;\n\
+}}\n"
+            ),
+            DualAccum::LcmAbsOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    found: i64 = 0;\n\
+    l: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                if found == 0 {{\n\
+                    l = a;\n\
+                    found = 1;\n\
+                }} else {{\n\
+                    g: i64 = l;\n\
+                    b: i64 = a;\n\
+                    while b != 0 {{\n\
+                        t: i64 = b;\n\
+                        b = g % b;\n\
+                        g = t;\n\
+                    }}\n\
+                    l = (l / g) * a;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return l;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -6440,6 +6525,8 @@ fn try_dual_and_pairwise(
         DualAccum::ProductAbsOddNonZero,
         DualAccum::GcdAbsEvenNonZero,
         DualAccum::GcdAbsOddNonZero,
+        DualAccum::LcmAbsEvenNonZero,
+        DualAccum::LcmAbsOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -8965,6 +9052,8 @@ enum KClosed {
     FirstIndexDivisibleByK,
     /// Last index of element divisible by k (none → -1; k == 0 → None).
     LastIndexDivisibleByK,
+    /// Sum of |v| for elements divisible by k (k == 0 → None).
+    AbsSumDivisibleByK,
 }
 
 impl KClosed {
@@ -9079,6 +9168,7 @@ impl KClosed {
             KClosed::MinDivisibleByK => "min_divisible_by_k",
             KClosed::FirstIndexDivisibleByK => "first_index_divisible_by_k",
             KClosed::LastIndexDivisibleByK => "last_index_divisible_by_k",
+            KClosed::AbsSumDivisibleByK => "abs_sum_divisible_by_k",
         }
     }
 
@@ -9923,6 +10013,17 @@ impl KClosed {
                     }
                 }
                 Some(-1)
+            }
+            KClosed::AbsSumDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                Some(
+                    arr.iter()
+                        .filter(|&&v| v % k == 0)
+                        .map(|&v| v.abs())
+                        .fold(0i64, i64::saturating_add),
+                )
             }
         }
     }
@@ -11458,6 +11559,20 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::AbsSumDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % k == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + a;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -11579,6 +11694,7 @@ fn try_k_closed(
         KClosed::MinDivisibleByK,
         KClosed::FirstIndexDivisibleByK,
         KClosed::LastIndexDivisibleByK,
+        KClosed::AbsSumDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -12937,5 +13053,9 @@ mod tests {
         assert_eq!(DualAccum::GcdAbsOddNonZero.eval(&[0, 15, -25, 2]), Some(5));
         assert_eq!(DualAccum::GcdAbsEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::LastIndexDivisibleByK.eval(&[3, 4, 6], 2), Some(2));
+        assert_eq!(DualAccum::LcmAbsEvenNonZero.eval(&[0, 4, 6, 3]), Some(12));
+        assert_eq!(DualAccum::LcmAbsOddNonZero.eval(&[0, 3, 5, 2]), Some(15));
+        assert_eq!(DualAccum::LcmAbsEvenNonZero.eval(&[0, 1, 3]), Some(1));
+        assert_eq!(KClosed::AbsSumDivisibleByK.eval(&[-4, 3, 6], 2), Some(10));
     }
 }

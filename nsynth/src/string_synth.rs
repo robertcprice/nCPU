@@ -880,6 +880,7 @@ enum WordShape {
     JoinWithMinusEq,
     JoinWithStarEq,
     JoinWithSlashEq,
+    JoinWithPercentEq,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1007,6 +1008,7 @@ impl WordShape {
             WordShape::JoinWithMinusEq => "join_with_minus_eq",
             WordShape::JoinWithStarEq => "join_with_star_eq",
             WordShape::JoinWithSlashEq => "join_with_slash_eq",
+            WordShape::JoinWithPercentEq => "join_with_percent_eq",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1452,6 +1454,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithMinusEq => words.join("-="),
         WordShape::JoinWithStarEq => words.join("*="),
         WordShape::JoinWithSlashEq => words.join("/="),
+        WordShape::JoinWithPercentEq => words.join("%="),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1825,6 +1828,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithSlashEq => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"/=\");\n}}\n"
         ),
+        WordShape::JoinWithPercentEq => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"%=\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1855,7 +1861,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 120] = [
+    const SHAPES: [WordShape; 121] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1974,6 +1980,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithMinusEq,
         WordShape::JoinWithStarEq,
         WordShape::JoinWithSlashEq,
+        WordShape::JoinWithPercentEq,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2378,6 +2385,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Six digit count (char '6').
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '6').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"6\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-six_digit_count".to_string(),
                 error: None,
             });
         }
