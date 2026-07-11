@@ -722,6 +722,8 @@ enum WordShape {
     FilterLenEq2,
     /// Keep words with length > 3.
     FilterLenGt3,
+    /// Keep words with length == 3.
+    FilterLenEq3,
     /// Dedup all words preserving first-occurrence order.
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
@@ -763,6 +765,7 @@ impl WordShape {
             WordShape::DuplicateEach => "duplicate_each",
             WordShape::FilterLenEq2 => "filter_len_eq2",
             WordShape::FilterLenGt3 => "filter_len_gt3",
+            WordShape::FilterLenEq3 => "filter_len_eq3",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
             WordShape::TakeFirstTwo => "take_first_two",
@@ -909,6 +912,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .filter(|w| w.chars().count() > 3)
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::FilterLenEq3 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 3)
+            .collect::<Vec<_>>()
+            .join(sep),
         WordShape::DedupAll => {
             let mut out: Vec<&str> = Vec::new();
             for w in words {
@@ -1027,6 +1035,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenGt3 => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::FilterLenEq3 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::DedupAll => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1075,7 +1086,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 28] = [
+    const SHAPES: [WordShape; 29] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1096,6 +1107,7 @@ pub fn synthesize_word_program(
         WordShape::DuplicateEach,
         WordShape::FilterLenEq2,
         WordShape::FilterLenGt3,
+        WordShape::FilterLenEq3,
         WordShape::DedupAll,
         WordShape::SortByLen,
         WordShape::TakeFirstTwo,
@@ -1679,6 +1691,51 @@ pub fn synthesize_string_int_program(
             }
         }
     }
+    // Consonant count (ascii letters that are not vowels).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .filter(|c| !matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        is_letter: i64 = 0;\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                is_letter = 1;\n\
+            }}\n\
+        }}\n\
+        if is_letter == 1 {{\n\
+            is_vowel: i64 = 0;\n\
+            if c == \"a\" {{ is_vowel = 1; }}\n\
+            if c == \"e\" {{ is_vowel = 1; }}\n\
+            if c == \"i\" {{ is_vowel = 1; }}\n\
+            if c == \"o\" {{ is_vowel = 1; }}\n\
+            if c == \"u\" {{ is_vowel = 1; }}\n\
+            if is_vowel == 0 {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-consonant_count".to_string(),
+                error: None,
+            });
+        }
+    }
     // Longest / shortest word length (nonempty words).
     for sep in [" ", "-", "_", ",", "/"] {
         let nontrivial = examples
@@ -1755,6 +1812,37 @@ pub fn synthesize_string_int_program(
                     success: true,
                     code,
                     method: "str-shortest_word_len".to_string(),
+                    error: None,
+                });
+            }
+        }
+        let sum_ok = examples.iter().all(|(s, o)| {
+            let total: i64 = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .sum();
+            total == *o
+        });
+        if sum_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    total: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            total = total + w.len;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-sum_word_lens".to_string(),
                     error: None,
                 });
             }
