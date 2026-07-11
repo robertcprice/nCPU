@@ -742,6 +742,8 @@ enum WordShape {
     FilterLenGt4,
     /// Keep words with length < 4.
     FilterLenLt4,
+    /// Keep words with length == 5.
+    FilterLenEq5,
     /// Dedup all words preserving first-occurrence order.
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
@@ -815,6 +817,7 @@ impl WordShape {
             WordShape::FilterLenEq4 => "filter_len_eq4",
             WordShape::FilterLenGt4 => "filter_len_gt4",
             WordShape::FilterLenLt4 => "filter_len_lt4",
+            WordShape::FilterLenEq5 => "filter_len_eq5",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
             WordShape::SortByLenDesc => "sort_by_len_desc",
@@ -1017,6 +1020,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenLt4 => words
             .into_iter()
             .filter(|w| w.chars().count() < 4)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenEq5 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 5)
             .collect::<Vec<_>>()
             .join(sep),
         WordShape::DedupAll => {
@@ -1237,7 +1245,10 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenLt4 => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 4 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
-        WordShape::DedupAll => format!(
+                WordShape::FilterLenEq5 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 5 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+WordShape::DedupAll => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::SortByLen => format!(
@@ -1285,17 +1296,10 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ConcatWords => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"\");\n}}\n"
         ),
-                WordShape::FourthWord => format!(
-            "fn transform({p}: string) -> string {{
-    words: [string] = {p}.split("{sep}");
-    if words.len < 4 {{
-        return "";
-    }}
-    return words[3];
-}}
-"
+        WordShape::FourthWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 4 {{\n        return \"\";\n    }}\n    return words[3];\n}}\n"
         ),
-WordShape::UpperEachWord => format!(
+        WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::LowerEachWord => format!(
@@ -1325,7 +1329,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 49] = [
+    const SHAPES: [WordShape; 50] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1356,6 +1360,7 @@ pub fn synthesize_word_program(
         WordShape::FilterLenEq4,
         WordShape::FilterLenGt4,
         WordShape::FilterLenLt4,
+        WordShape::FilterLenEq5,
         WordShape::DedupAll,
         WordShape::SortByLen,
         WordShape::SortByLenDesc,
@@ -2517,6 +2522,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-semicolon_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Question-mark count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '?').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"?\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-question_count".to_string(),
                 error: None,
             });
         }

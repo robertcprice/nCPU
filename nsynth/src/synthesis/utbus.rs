@@ -3486,6 +3486,8 @@ fn try_dual_and_pairwise(
         IndexScan::MaxAbsOddIndices,
         IndexScan::MinAbsEvenIndices,
         IndexScan::MinAbsOddIndices,
+        IndexScan::MeanAbsEvenTrunc,
+        IndexScan::MeanAbsOddTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -3611,6 +3613,10 @@ enum IndexScan {
     MinAbsEvenIndices,
     /// Min absolute value at odd indices (no odd → 0).
     MinAbsOddIndices,
+    /// Truncating mean of |v| at even indices (empty → 0).
+    MeanAbsEvenTrunc,
+    /// Truncating mean of |v| at odd indices (no odd → 0).
+    MeanAbsOddTrunc,
 }
 
 impl IndexScan {
@@ -3667,6 +3673,8 @@ impl IndexScan {
             IndexScan::MaxAbsOddIndices => "max_abs_odd_indices",
             IndexScan::MinAbsEvenIndices => "min_abs_even_indices",
             IndexScan::MinAbsOddIndices => "min_abs_odd_indices",
+            IndexScan::MeanAbsEvenTrunc => "mean_abs_even_trunc",
+            IndexScan::MeanAbsOddTrunc => "mean_abs_odd_trunc",
         }
     }
 
@@ -4122,6 +4130,34 @@ impl IndexScan {
                     }
                 }
                 Some(best)
+            }
+            IndexScan::MeanAbsEvenTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 0)
+                    .map(|(_, &v)| v.abs())
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    let sum = vals.iter().copied().fold(0i64, i64::saturating_add);
+                    Some(sum / (vals.len() as i64))
+                }
+            }
+            IndexScan::MeanAbsOddTrunc => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 1)
+                    .map(|(_, &v)| v.abs())
+                    .collect();
+                if vals.is_empty() {
+                    Some(0)
+                } else {
+                    let sum = vals.iter().copied().fold(0i64, i64::saturating_add);
+                    Some(sum / (vals.len() as i64))
+                }
             }
         }
     }
@@ -4763,6 +4799,38 @@ impl IndexScan {
     return best;\n\
 }}\n"
             ),
+            IndexScan::MeanAbsEvenTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 0; }}\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        total = total + a;\n\
+        count = count + 1;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
+            IndexScan::MeanAbsOddTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len < 2 {{ return 0; }}\n\
+    total: i64 = 0;\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        total = total + a;\n\
+        count = count + 1;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total / count;\n\
+}}\n"
+            ),
 
         }
     }
@@ -4849,6 +4917,10 @@ enum KClosed {
     FirstAbsEqK,
     /// Last index where |arr[i]| == k, else -1.
     LastAbsEqK,
+    /// First index where |arr[i]| <= k, else -1.
+    FirstAbsLeK,
+    /// Last index where |arr[i]| <= k, else -1.
+    LastAbsLeK,
 }
 
 impl KClosed {
@@ -4893,6 +4965,8 @@ impl KClosed {
             KClosed::LastAbsGeK => "last_abs_ge_k",
             KClosed::FirstAbsEqK => "first_abs_eq_k",
             KClosed::LastAbsEqK => "last_abs_eq_k",
+            KClosed::FirstAbsLeK => "first_abs_le_k",
+            KClosed::LastAbsLeK => "last_abs_le_k",
         }
     }
 
@@ -5130,6 +5204,22 @@ impl KClosed {
             KClosed::LastAbsEqK => {
                 for i in (0..arr.len()).rev() {
                     if arr[i].abs() == k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::FirstAbsLeK => {
+                for (i, &v) in arr.iter().enumerate() {
+                    if v.abs() <= k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::LastAbsLeK => {
+                for i in (0..arr.len()).rev() {
+                    if arr[i].abs() <= k {
                         return Some(i as i64);
                     }
                 }
@@ -5615,6 +5705,34 @@ KClosed::FirstAbsGeK => format!(
     return 0 - 1;\n\
 }}\n"
             ),
+            KClosed::FirstAbsLeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a <= k {{\n\
+            return i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
+            KClosed::LastAbsLeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = arr.len - 1;\n\
+    while i >= 0 {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a <= k {{\n\
+            return i;\n\
+        }}\n\
+        i = i - 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -5666,6 +5784,8 @@ fn try_k_closed(
         KClosed::LastAbsGeK,
         KClosed::FirstAbsEqK,
         KClosed::LastAbsEqK,
+        KClosed::FirstAbsLeK,
+        KClosed::LastAbsLeK,
     ] {
         let ok = inputs
             .iter()
@@ -6784,5 +6904,9 @@ mod tests {
         assert_eq!(IndexScan::MinAbsOddIndices.eval(&[-3, 9, 2, 8]), Some(8));
         assert_eq!(KClosed::CountAbsGeK.eval(&[-5, 2, 4], 4), Some(2));
         assert_eq!(KClosed::CountAbsLeK.eval(&[-5, 2, 4], 4), Some(2));
+        assert_eq!(IndexScan::MeanAbsEvenTrunc.eval(&[-4, 9, 2, 8]), Some(3));
+        assert_eq!(IndexScan::MeanAbsOddTrunc.eval(&[-4, 9, 2, 8]), Some(8));
+        assert_eq!(KClosed::FirstAbsLeK.eval(&[5, 1, -3, 2], 2), Some(1));
+        assert_eq!(KClosed::LastAbsLeK.eval(&[5, 1, -3, 2], 2), Some(3));
     }
 }
