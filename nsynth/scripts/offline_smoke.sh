@@ -465,6 +465,10 @@ fn dual_count_eq_mean(arr: &[i64]) -> Option<i64> {
     Some(arr.iter().filter(|&&x| x == mean).count() as i64)
 }
 
+fn dual_product_abs(arr: &[i64]) -> i64 {
+    arr.iter().map(|&x| x.abs()).fold(1i64, i64::saturating_mul)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -825,6 +829,13 @@ fn pairwise_first_increase_idx(arr: &[i64]) -> i64 {
     -1
 }
 
+fn pairwise_first_decrease_idx(arr: &[i64]) -> i64 {
+    for i in 1..arr.len() {
+        if arr[i] < arr[i - 1] { return i as i64; }
+    }
+    -1
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -904,6 +915,14 @@ fn index_xor_even(arr: &[i64]) -> i64 {
 
 fn index_xor_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,_)| i%2==1).fold(0i64, |a, (_,&v)| a ^ v)
+}
+
+fn index_or_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==0).fold(0i64, |a, (_,&v)| a | v)
+}
+
+fn index_or_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==1).fold(0i64, |a, (_,&v)| a | v)
 }
 
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
@@ -1020,6 +1039,10 @@ fn k_last_le(arr: &[i64], k: i64) -> i64 {
         if arr[i] <= k { return i as i64; }
     }
     -1
+}
+
+fn k_sum_abs_gt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v > k).map(|&v| v.abs()).sum()
 }
 
 #[cfg(test)]
@@ -1191,6 +1214,7 @@ mod tests {
         assert_eq!(dual_or_all(&[1, 2, 4]), 7);
         assert_eq!(dual_and_all(&[7, 3, 1]), 1);
         assert_eq!(dual_count_eq_mean(&[1, 2, 3, 2]), Some(2));
+        assert_eq!(dual_product_abs(&[-2, 3, -4]), 24);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1226,6 +1250,9 @@ mod tests {
         assert_eq!(k_first_le(&[5, 4, 1, 2], 2), 2);
         assert_eq!(k_last_ge(&[1, 5, 3, 2], 3), 2);
         assert_eq!(k_last_le(&[5, 4, 1, 2], 2), 3);
+        assert_eq!(k_sum_abs_gt(&[-5, 2, 4], 1), 6);
+        assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
+        assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1275,6 +1302,7 @@ mod tests {
         assert_eq!(pairwise_mean_sq_diff_trunc(&[1, 4, 2]), 6);
         assert_eq!(pairwise_first_increase_idx(&[5, 4, 1, 3]), 3);
         assert_eq!(pairwise_first_increase_idx(&[5, 4, 1]), -1);
+        assert_eq!(pairwise_first_decrease_idx(&[1, 3, 2, 5]), 2);
     }
 }
 EOF
@@ -1376,6 +1404,13 @@ fn dedup_all(s: &str, sep: &str) -> String {
 fn sort_by_len(s: &str, sep: &str) -> String {
     let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
     owned.sort_by_key(|w| w.chars().count());
+    owned.join(sep)
+}
+
+fn sort_words_desc(s: &str, sep: &str) -> String {
+    let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
+    owned.sort();
+    owned.reverse();
     owned.join(sep)
 }
 
@@ -1491,6 +1526,10 @@ fn tab_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '\t').count() as i64
 }
 
+fn newline_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '\n').count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1526,6 +1565,7 @@ mod tests {
         assert_eq!(filter_len_lt4("cat dog hi me", " "), "cat dog hi me");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
+        assert_eq!(sort_words_desc("b aa c", " "), "c b aa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
         assert_eq!(drop_first_two("one two three four", " "), "three four");
         assert_eq!(take_last_two("one two three four", " "), "three four");
@@ -1546,6 +1586,7 @@ mod tests {
         assert_eq!(digit_product("a23b"), 6);
         assert_eq!(punctuation_count("Hi, you!"), 2);
         assert_eq!(tab_count("a\tb\tc"), 2);
+        assert_eq!(newline_count("a\nb\nc"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

@@ -688,6 +688,8 @@ enum WordShape {
     ReverseEachWord,
     /// Sort the words ascending (lexicographic), rejoin.
     SortWords,
+    /// Sort the words descending (lexicographic), rejoin.
+    SortWordsDesc,
     /// Reverse the ORDER of the words, rejoin.
     ReverseWordOrder,
     /// The single longest word (first on a length tie).
@@ -764,6 +766,7 @@ impl WordShape {
             WordShape::TitleCase => "title_case",
             WordShape::ReverseEachWord => "reverse_each_word",
             WordShape::SortWords => "sort_words",
+            WordShape::SortWordsDesc => "sort_words_desc",
             WordShape::ReverseWordOrder => "reverse_word_order",
             WordShape::LongestWord => "longest_word",
             WordShape::ShortestWord => "shortest_word",
@@ -828,6 +831,12 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::SortWords => {
             let mut ws = words.clone();
             ws.sort_unstable();
+            ws.join(sep)
+        }
+        WordShape::SortWordsDesc => {
+            let mut ws = words.clone();
+            ws.sort_unstable();
+            ws.reverse();
             ws.join(sep)
         }
         WordShape::ReverseWordOrder => {
@@ -1066,6 +1075,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::SortWords => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").sort().join(\"{sep}\");\n}}\n"
         ),
+        WordShape::SortWordsDesc => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").sort().reverse().join(\"{sep}\");\n}}\n"
+        ),
         WordShape::ReverseWordOrder => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").reverse().join(\"{sep}\");\n}}\n"
         ),
@@ -1192,10 +1204,11 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 37] = [
+    const SHAPES: [WordShape; 38] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
+        WordShape::SortWordsDesc,
         WordShape::ReverseWordOrder,
         WordShape::LongestWord,
         WordShape::ShortestWord,
@@ -2006,6 +2019,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-tab_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Newline count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\n').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\n\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-newline_count".to_string(),
                 error: None,
             });
         }
