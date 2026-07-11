@@ -840,6 +840,8 @@ enum WordShape {
     JoinWithTab,
     /// Join words with a newline regardless of input sep.
     JoinWithNewline,
+    /// Join words with CR regardless of input sep.
+    JoinWithCR,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -928,6 +930,7 @@ impl WordShape {
             WordShape::JoinWithTilde => "join_with_tilde",
             WordShape::JoinWithTab => "join_with_tab",
             WordShape::JoinWithNewline => "join_with_newline",
+            WordShape::JoinWithCR => "join_with_cr",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1333,8 +1336,8 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithCaret => words.join("^"),
         WordShape::JoinWithTilde => words.join("~"),
         WordShape::JoinWithTab => words.join("	"),
-        WordShape::JoinWithNewline => words.join("
-"),
+        WordShape::JoinWithNewline => words.join("\n"),
+        WordShape::JoinWithCR => words.join("\r"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1591,7 +1594,10 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithNewline => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"\\n\");\n}}\n"
         ),
-WordShape::UpperEachWord => format!(
+        WordShape::JoinWithCR => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"\\r\");\n}}\n"
+        ),
+        WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::LowerEachWord => format!(
@@ -1621,7 +1627,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 81] = [
+    const SHAPES: [WordShape; 82] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1701,6 +1707,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithTilde,
         WordShape::JoinWithTab,
         WordShape::JoinWithNewline,
+        WordShape::JoinWithCR,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -3745,7 +3752,35 @@ pub fn synthesize_string_int_program(
             });
         }
     }
-// Consonant count (ascii letters that are not vowels).
+    // EOT count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x04').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x04\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-eot_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Consonant count (ascii letters that are not vowels).
     if examples.iter().all(|(s, o)| {
         s.chars()
             .filter(|c| c.is_ascii_alphabetic())

@@ -921,6 +921,10 @@ enum DualAccum {
     GcdAbsEvens,
     /// GCD of |x| for odd-valued elements (none → 0).
     GcdAbsOdds,
+    /// LCM of |x| for even-valued elements (none → 0).
+    LcmAbsEvens,
+    /// LCM of |x| for odd-valued elements (none → 0).
+    LcmAbsOdds,
 }
 
 impl DualAccum {
@@ -1034,6 +1038,8 @@ impl DualAccum {
             DualAccum::MeanAbsOddsTrunc => "mean_abs_odds_trunc",
             DualAccum::GcdAbsEvens => "gcd_abs_evens",
             DualAccum::GcdAbsOdds => "gcd_abs_odds",
+            DualAccum::LcmAbsEvens => "lcm_abs_evens",
+            DualAccum::LcmAbsOdds => "lcm_abs_odds",
         }
     }
 
@@ -1077,6 +1083,8 @@ impl DualAccum {
                 | DualAccum::MeanAbsOddsTrunc
                 | DualAccum::GcdAbsEvens
                 | DualAccum::GcdAbsOdds
+                | DualAccum::LcmAbsEvens
+                | DualAccum::LcmAbsOdds
                 | DualAccum::AbsRange
                 | DualAccum::SumPositives
                 | DualAccum::SumNegatives
@@ -1871,6 +1879,32 @@ impl DualAccum {
                     }
                 }
                 Some(g.unwrap_or(0))
+            }
+            DualAccum::LcmAbsEvens => {
+                let mut l: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 == 0 {
+                        let a = x.abs();
+                        l = Some(match l {
+                            None => a,
+                            Some(prev) => i64_lcm(prev, a).unwrap_or(0),
+                        });
+                    }
+                }
+                Some(l.unwrap_or(0))
+            }
+            DualAccum::LcmAbsOdds => {
+                let mut l: Option<i64> = None;
+                for &x in arr {
+                    if x % 2 != 0 {
+                        let a = x.abs();
+                        l = Some(match l {
+                            None => a,
+                            Some(prev) => i64_lcm(prev, a).unwrap_or(0),
+                        });
+                    }
+                }
+                Some(l.unwrap_or(0))
             }
         }
     }
@@ -3247,6 +3281,60 @@ DualAccum::SumSquaresOdds => format!(
     return g;\n\
 }}\n"
             ),
+            DualAccum::LcmAbsEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    g: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            if found == 0 {{\n\
+                g = a;\n\
+                found = 1;\n\
+            }} else {{\n\
+                aa: i64 = g;\n\
+                bb: i64 = a;\n\
+                while bb != 0 {{\n\
+                    t: i64 = bb;\n\
+                    bb = aa % bb;\n\
+                    aa = t;\n\
+                }}\n\
+                gg: i64 = aa;\n\
+                g = (g / gg) * a;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return g;\n\
+}}\n"
+            ),
+            DualAccum::LcmAbsOdds => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    g: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            if found == 0 {{\n\
+                g = a;\n\
+                found = 1;\n\
+            }} else {{\n\
+                aa: i64 = g;\n\
+                bb: i64 = a;\n\
+                while bb != 0 {{\n\
+                    t: i64 = bb;\n\
+                    bb = aa % bb;\n\
+                    aa = t;\n\
+                }}\n\
+                gg: i64 = aa;\n\
+                g = (g / gg) * a;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return g;\n\
+}}\n"
+            ),
 
 
         }
@@ -4313,6 +4401,8 @@ fn try_dual_and_pairwise(
         DualAccum::MeanAbsOddsTrunc,
         DualAccum::GcdAbsEvens,
         DualAccum::GcdAbsOdds,
+        DualAccum::LcmAbsEvens,
+        DualAccum::LcmAbsOdds,
     ] {
         let ok = inputs
             .iter()
@@ -6762,6 +6852,8 @@ enum KClosed {
     MaxWhereAbsGeK,
     /// Min among elements with |v| >= k (none → 0).
     MinWhereAbsGeK,
+    /// Sum of elements with |v| >= k.
+    SumWhereAbsGeK,
 }
 
 impl KClosed {
@@ -6838,6 +6930,7 @@ impl KClosed {
             KClosed::MinWhereAbsLtK => "min_where_abs_lt_k",
             KClosed::MaxWhereAbsGeK => "max_where_abs_ge_k",
             KClosed::MinWhereAbsGeK => "min_where_abs_ge_k",
+            KClosed::SumWhereAbsGeK => "sum_where_abs_ge_k",
         }
     }
 
@@ -7380,6 +7473,12 @@ impl KClosed {
                 }
                 Some(best)
             }
+            KClosed::SumWhereAbsGeK => Some(
+                arr.iter()
+                    .filter(|&&v| v.abs() >= k)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -8362,6 +8461,19 @@ KClosed::MinWhereAbsNeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::SumWhereAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a >= k {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -8445,6 +8557,7 @@ fn try_k_closed(
         KClosed::MinWhereAbsLtK,
         KClosed::MaxWhereAbsGeK,
         KClosed::MinWhereAbsGeK,
+        KClosed::SumWhereAbsGeK,
     ] {
         let ok = inputs
             .iter()
@@ -9667,5 +9780,8 @@ mod tests {
         assert_eq!(DualAccum::GcdAbsEvens.eval(&[-4, 6, 3, 2]), Some(2));
         assert_eq!(DualAccum::GcdAbsOdds.eval(&[-4, 6, 3, 9]), Some(3));
         assert_eq!(KClosed::MinWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(-5));
+        assert_eq!(DualAccum::LcmAbsEvens.eval(&[-4, 6, 3, 2]), Some(12));
+        assert_eq!(DualAccum::LcmAbsOdds.eval(&[-4, 6, 3, 9]), Some(9));
+        assert_eq!(KClosed::SumWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(-1));
     }
 }
