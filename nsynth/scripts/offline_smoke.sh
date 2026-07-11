@@ -545,6 +545,10 @@ fn dual_count_non_positives(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x <= 0).count() as i64
 }
 
+fn dual_product_non_positives(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x <= 0).fold(1i64, |a, &b| a.saturating_mul(b))
+}
+
 fn dual_min_abs(arr: &[i64]) -> i64 {
     arr.iter().map(|&x| x.abs()).min().unwrap_or(0)
 }
@@ -1209,6 +1213,26 @@ fn index_max_nonzero_odd(arr: &[i64]) -> i64 {
     best
 }
 
+fn index_min_nonzero_even(arr: &[i64]) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for (i,&v) in arr.iter().enumerate() {
+        if i%2==0 && v != 0 {
+            if !found || v < best { best = v; found = true; }
+        }
+    }
+    best
+}
+
+fn index_min_nonzero_odd(arr: &[i64]) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for (i,&v) in arr.iter().enumerate() {
+        if i%2==1 && v != 0 {
+            if !found || v < best { best = v; found = true; }
+        }
+    }
+    best
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1415,6 +1439,20 @@ fn k_last_abs_gt(arr: &[i64], k: i64) -> i64 {
     -1
 }
 
+fn k_first_abs_lt(arr: &[i64], k: i64) -> i64 {
+    for (i, &v) in arr.iter().enumerate() {
+        if v.abs() < k { return i as i64; }
+    }
+    -1
+}
+
+fn k_last_abs_lt(arr: &[i64], k: i64) -> i64 {
+    for i in (0..arr.len()).rev() {
+        if arr[i].abs() < k { return i as i64; }
+    }
+    -1
+}
+
 fn k_first_abs_le(arr: &[i64], k: i64) -> i64 {
     for (i, &v) in arr.iter().enumerate() {
         if v.abs() <= k { return i as i64; }
@@ -1610,6 +1648,7 @@ mod tests {
         assert_eq!(dual_sum_non_negatives(&[-2, 3, 0, 4]), 7);
         assert_eq!(dual_sum_non_positives(&[-2, 3, 0, 4]), -2);
         assert_eq!(dual_count_non_positives(&[-2, 3, 0, 4]), 2);
+        assert_eq!(dual_product_non_positives(&[-2, 3, 0, 4]), 0);
         assert_eq!(dual_min_abs(&[-3, 9, 2]), 2);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
@@ -1680,6 +1719,10 @@ mod tests {
         assert_eq!(index_max_nonzero_even(&[0, 9, -3, 8]), -3);
         assert_eq!(index_max_nonzero_odd(&[0, 9, -3, 8]), 9);
         assert_eq!(k_sum_abs_ne(&[-5, 2, 5, 4], 5), 6);
+        assert_eq!(index_min_nonzero_even(&[5, 9, -3, 8]), -3);
+        assert_eq!(index_min_nonzero_odd(&[5, 9, -3, 8]), 8);
+        assert_eq!(k_first_abs_lt(&[5, 1, -3, 2], 2), 1);
+        assert_eq!(k_last_abs_lt(&[5, 1, -3, 2], 2), 1);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1946,6 +1989,11 @@ fn take_last_three(s: &str, sep: &str) -> String {
     if words.len() <= 3 { words.join(sep) } else { words[words.len()-3..].join(sep) }
 }
 
+fn take_last_four(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 4 { words.join(sep) } else { words[words.len()-4..].join(sep) }
+}
+
 fn drop_last_two(s: &str, sep: &str) -> String {
     let words: Vec<&str> = s.split(sep).collect();
     if words.len() <= 2 { String::new() } else { words[..words.len()-2].join(sep) }
@@ -2118,6 +2166,10 @@ fn percent_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '%').count() as i64
 }
 
+fn dollar_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '$').count() as i64
+}
+
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
@@ -2172,6 +2224,7 @@ mod tests {
         assert_eq!(drop_first_four("one two three four five six", " "), "five six");
         assert_eq!(take_last_two("one two three four", " "), "three four");
         assert_eq!(take_last_three("one two three four", " "), "two three four");
+        assert_eq!(take_last_four("one two three four five", " "), "two three four five");
         assert_eq!(drop_last_two("one two three four", " "), "one two");
         assert_eq!(drop_last_three("one two three four five", " "), "one two");
         assert_eq!(digit_count("a1b22"), 3);
@@ -2208,6 +2261,7 @@ mod tests {
         assert_eq!(at_count("a@b@@c"), 3);
         assert_eq!(hash_count("a#b##c"), 3);
         assert_eq!(percent_count("a%b%%c"), 3);
+        assert_eq!(dollar_count("a$b$$c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

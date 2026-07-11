@@ -770,6 +770,8 @@ enum WordShape {
     TakeLastTwo,
     /// Keep only the last three words.
     TakeLastThree,
+    /// Keep only the last four words.
+    TakeLastFour,
     /// Drop the last two words, rejoin.
     DropLastTwo,
     /// Drop the last three words, rejoin.
@@ -839,6 +841,7 @@ impl WordShape {
             WordShape::DropFirstFour => "drop_first_four",
             WordShape::TakeLastTwo => "take_last_two",
             WordShape::TakeLastThree => "take_last_three",
+            WordShape::TakeLastFour => "take_last_four",
             WordShape::DropLastTwo => "drop_last_two",
             WordShape::DropLastThree => "drop_last_three",
             WordShape::CapLastWord => "cap_last_word",
@@ -1115,6 +1118,13 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[words.len() - 3..].join(sep)
             }
         }
+        WordShape::TakeLastFour => {
+            if words.len() <= 4 {
+                words.join(sep)
+            } else {
+                words[words.len() - 4..].join(sep)
+            }
+        }
         WordShape::DropLastTwo => {
             if words.len() <= 2 {
                 String::new()
@@ -1320,7 +1330,10 @@ WordShape::TakeLastTwo => format!(
         WordShape::TakeLastThree => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 3 {{\n        start = words.len - 3;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
-        WordShape::DropLastTwo => format!(
+                WordShape::TakeLastFour => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 4 {{\n        start = words.len - 4;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+WordShape::DropLastTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 2 {{\n        end = end - 2;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::DropLastThree => format!(
@@ -1374,7 +1387,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 54] = [
+    const SHAPES: [WordShape; 55] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1419,6 +1432,7 @@ pub fn synthesize_word_program(
         WordShape::DropFirstFour,
         WordShape::TakeLastTwo,
         WordShape::TakeLastThree,
+        WordShape::TakeLastFour,
         WordShape::DropLastTwo,
         WordShape::DropLastThree,
         WordShape::CapLastWord,
@@ -2711,6 +2725,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-percent_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Dollar-sign count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '$').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"$\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-dollar_count".to_string(),
                 error: None,
             });
         }
