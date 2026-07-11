@@ -1834,9 +1834,11 @@ impl CodingAgentSession {
             examples,
         )
         .ok()?;
-        // Recall: if a prior Rust-lane win for this fn name exists, install it
-        // before the hole-filler (cargo still gates — wrong recall just fails tests).
-        if let Some(prior) = crate::schema_miner::find_rust_learned_by_name(&fn_name) {
+        // Recall: prefer examples-fingerprint match, else fn-name match. Cargo
+        // still gates — wrong recall just fails tests and the hole-filler runs.
+        if let Some(prior) =
+            crate::schema_miner::find_rust_learned(&fn_name, Some(examples))
+        {
             let _ = crate::schema_miner::apply_rust_learned_to_lib(&self.root, &prior);
         }
         let scaffolded = crate::whole_software::ScaffoldedCrate {
@@ -1878,6 +1880,15 @@ impl CodingAgentSession {
         result: &mut AgentQueryResult,
         examples: Option<&[crate::benchmark::Example]>,
     ) {
+        let exs: Vec<crate::benchmark::Example> = match examples {
+            Some(e) if e.len() >= 2 => e.to_vec(),
+            _ => {
+                // Best-effort: parse inline examples from the query for schema
+                // fills that still carried I/O in the prose.
+                let (_, parsed) = crate::verified_nl_router::split_prompt_examples(query);
+                parsed
+            }
+        };
         let lib_path = self.root.join("src/lib.rs");
         if let Ok(lib) = std::fs::read_to_string(&lib_path) {
             let surfaces = vec![
@@ -1891,18 +1902,10 @@ impl CodingAgentSession {
                 &lib,
             );
             crate::schema_miner::append_harvest_row(query, &lib);
-            // Parallel Rust learned store (no Mog transpile required).
-            crate::schema_miner::append_rust_learned(component_name, query, &lib);
+            // Parallel Rust learned store (fingerprint when examples known).
+            let ex_ref = if exs.len() >= 2 { Some(exs.as_slice()) } else { None };
+            crate::schema_miner::append_rust_learned_ex(component_name, query, &lib, ex_ref);
         }
-        let exs: Vec<crate::benchmark::Example> = match examples {
-            Some(e) if e.len() >= 2 => e.to_vec(),
-            _ => {
-                // Best-effort: parse inline examples from the query for schema
-                // fills that still carried I/O in the prose.
-                let (_, parsed) = crate::verified_nl_router::split_prompt_examples(query);
-                parsed
-            }
-        };
         if exs.len() >= 2 {
             self.maybe_distill_rust_lane_to_mog(component_name, &exs, result);
         }

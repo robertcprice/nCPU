@@ -173,6 +173,28 @@ fn dual_prefix_max_sum(arr: &[i64]) -> Option<i64> {
     Some(total)
 }
 
+fn dual_max_subarray(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut current = 0i64;
+    let mut best = arr[0];
+    for &item in arr {
+        current = if current > 0 { current + item } else { item };
+        if current > best { best = current; }
+    }
+    Some(best)
+}
+
+fn pairwise_sum_abs_diff(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut total = 0i64;
+    for i in 1..arr.len() {
+        let mut d = arr[i] - arr[i - 1];
+        if d < 0 { d = -d; }
+        total += d;
+    }
+    total
+}
+
 fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut best = 1i64;
@@ -296,6 +318,8 @@ mod tests {
         assert_eq!(dual_stock_profit(&[7, 1, 5, 3, 6, 4]), Some(5));
         assert_eq!(dual_stock_profit(&[7, 6, 4, 3, 1]), Some(0));
         assert_eq!(dual_prefix_max_sum(&[1, 3, 2, 5]), Some(12));
+        assert_eq!(dual_max_subarray(&[1, -2, 3, 4, -1]), Some(7));
+        assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 

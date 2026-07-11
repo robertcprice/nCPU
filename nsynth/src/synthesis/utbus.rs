@@ -644,6 +644,10 @@ enum DualAccum {
     StockProfit,
     /// Sum of running maxima: for each prefix, add max so far.
     PrefixMaxSum,
+    /// Sum of running minima.
+    PrefixMinSum,
+    /// Maximum contiguous subarray sum (Kadane).
+    MaxSubarraySum,
 }
 
 impl DualAccum {
@@ -653,6 +657,8 @@ impl DualAccum {
             DualAccum::SecondMax => "second_max",
             DualAccum::StockProfit => "stock_profit",
             DualAccum::PrefixMaxSum => "prefix_max_sum",
+            DualAccum::PrefixMinSum => "prefix_min_sum",
+            DualAccum::MaxSubarraySum => "max_subarray_sum",
         }
     }
 
@@ -712,6 +718,32 @@ impl DualAccum {
                     total = total.saturating_add(running_max);
                 }
                 Some(total)
+            }
+            DualAccum::PrefixMinSum => {
+                let mut running_min = arr[0];
+                let mut total = 0i64;
+                for &x in arr {
+                    if x < running_min {
+                        running_min = x;
+                    }
+                    total = total.saturating_add(running_min);
+                }
+                Some(total)
+            }
+            DualAccum::MaxSubarraySum => {
+                let mut current = 0i64;
+                let mut best = arr[0];
+                for &item in arr {
+                    current = if current > 0 {
+                        current.saturating_add(item)
+                    } else {
+                        item
+                    };
+                    if current > best {
+                        best = current;
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -773,6 +805,32 @@ impl DualAccum {
     return total;\n\
 }}\n"
             ),
+            DualAccum::PrefixMinSum => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    running_min: i64 = arr[0];\n\
+    total: i64 = 0;\n\
+    for x in arr {{\n\
+        if x < running_min {{ running_min = x; }}\n\
+        total = total + running_min;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::MaxSubarraySum => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    current: i64 = 0;\n\
+    best: i64 = arr[0];\n\
+    for item in arr {{\n\
+        if current > 0 {{\n\
+            current = current + item;\n\
+        }} else {{\n\
+            current = item;\n\
+        }}\n\
+        if current > best {{ best = current; }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -792,6 +850,8 @@ enum PairwiseScan {
     NonDecreasing,
     /// Length of the longest run of equal consecutive elements.
     LongestPlateau,
+    /// Sum of `|arr[i] - arr[i-1]|` over adjacent pairs.
+    SumAbsDiff,
 }
 
 impl PairwiseScan {
@@ -803,6 +863,7 @@ impl PairwiseScan {
             PairwiseScan::StrictlyIncreasing => "strictly_increasing",
             PairwiseScan::NonDecreasing => "non_decreasing",
             PairwiseScan::LongestPlateau => "longest_plateau",
+            PairwiseScan::SumAbsDiff => "sum_abs_diff",
         }
     }
 
@@ -883,6 +944,17 @@ impl PairwiseScan {
                     }
                 }
                 Some(best)
+            }
+            PairwiseScan::SumAbsDiff => {
+                let mut total = 0i64;
+                for i in 1..arr.len() {
+                    let mut diff = arr[i].saturating_sub(arr[i - 1]);
+                    if diff < 0 {
+                        diff = 0i64.saturating_sub(diff);
+                    }
+                    total = total.saturating_add(diff);
+                }
+                Some(total)
             }
         }
     }
@@ -969,6 +1041,19 @@ impl PairwiseScan {
     return best;\n\
 }}\n"
             ),
+            PairwiseScan::SumAbsDiff => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        diff: i64 = arr[i] - arr[i - 1];\n\
+        if diff < 0 {{ diff = 0 - diff; }}\n\
+        total = total + diff;\n\
+        i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -984,6 +1069,8 @@ fn try_dual_and_pairwise(
         DualAccum::SecondMax,
         DualAccum::StockProfit,
         DualAccum::PrefixMaxSum,
+        DualAccum::PrefixMinSum,
+        DualAccum::MaxSubarraySum,
     ] {
         let ok = inputs
             .iter()
@@ -1010,6 +1097,7 @@ fn try_dual_and_pairwise(
         PairwiseScan::StrictlyIncreasing,
         PairwiseScan::NonDecreasing,
         PairwiseScan::LongestPlateau,
+        PairwiseScan::SumAbsDiff,
     ] {
         let ok = inputs
             .iter()
@@ -1733,5 +1821,29 @@ mod tests {
             |arr| arr.iter().filter(|&&x| x == 0).count() as i64,
         );
         assert_solves(&problem, "count");
+    }
+
+    #[test]
+    fn utbus_solves_max_subarray_sum() {
+        let problem = array_problem(
+            "max_subarray_sum",
+            "fn max_subarray_sum(arr: [i64]) -> i64",
+            &[&[1, -2, 3, 4, -1], &[-2, -3, -1], &[5], &[2, -1, 2, -1, 3]],
+            &[&[1, 2, 3], &[-5, 10, -3]],
+            |arr| DualAccum::MaxSubarraySum.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "max_subarray_sum");
+    }
+
+    #[test]
+    fn utbus_solves_sum_abs_diff() {
+        let problem = array_problem(
+            "sum_abs_diff",
+            "fn sum_abs_diff(arr: [i64]) -> i64",
+            &[&[1, 4, 2], &[5, 5], &[10, 3, 8], &[0]],
+            &[&[1, 2, 4], &[9, 1]],
+            |arr| PairwiseScan::SumAbsDiff.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "sum_abs_diff");
     }
 }

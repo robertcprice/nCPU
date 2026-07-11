@@ -372,6 +372,32 @@ pub struct RustLearnedRow {
     #[serde(default)]
     pub task: String,
     pub code: String,
+    /// Stable fingerprint of the I/O examples that verified this body (empty if unknown).
+    #[serde(default)]
+    pub examples_fp: String,
+}
+
+/// Compact fingerprint of benchmark examples for Rust-store recall.
+pub fn examples_fingerprint(examples: &[crate::benchmark::Example]) -> String {
+    use crate::benchmark::Value;
+    fn val_key(v: &Value) -> String {
+        match v {
+            Value::Int(i) => format!("i{i}"),
+            Value::Bool(b) => format!("b{b}"),
+            Value::Str(s) => format!("s{}", s.chars().take(64).collect::<String>()),
+            Value::Array(a) => {
+                let inner = a.iter().map(val_key).collect::<Vec<_>>().join(",");
+                format!("[{inner}]")
+            }
+            _ => "x".into(),
+        }
+    }
+    let mut parts = Vec::with_capacity(examples.len());
+    for ex in examples {
+        let inputs = ex.inputs.iter().map(val_key).collect::<Vec<_>>().join(";");
+        parts.push(format!("{inputs}->{}", val_key(&ex.expected)));
+    }
+    parts.join("|")
 }
 
 /// Path for the Rust-body learned store (no Mog transpile required).
@@ -396,6 +422,16 @@ pub fn rust_learned_path() -> Option<PathBuf> {
 /// Best-effort; no-op when no path resolves. Strips test modules via
 /// [`extract_entry_fn_body`].
 pub fn append_rust_learned(name: &str, task: &str, code: &str) {
+    append_rust_learned_ex(name, task, code, None);
+}
+
+/// Like [`append_rust_learned`] but records an examples fingerprint for recall.
+pub fn append_rust_learned_ex(
+    name: &str,
+    task: &str,
+    code: &str,
+    examples: Option<&[crate::benchmark::Example]>,
+) {
     let Some(path) = rust_learned_path() else {
         return;
     };
@@ -410,10 +446,15 @@ pub fn append_rust_learned(name: &str, task: &str, code: &str) {
     if body.is_empty() {
         return;
     }
+    let fp = examples
+        .filter(|e| e.len() >= 2)
+        .map(examples_fingerprint)
+        .unwrap_or_default();
     let row = RustLearnedRow {
         name: name.to_string(),
         task: task.chars().take(200).collect(),
         code: body,
+        examples_fp: fp,
     };
     let Ok(line) = serde_json::to_string(&row) else {
         return;
@@ -453,13 +494,28 @@ pub fn load_rust_learned(path: &Path) -> Vec<RustLearnedRow> {
 
 /// Most recent learned Rust body for `name` (case-insensitive), if any.
 pub fn find_rust_learned_by_name(name: &str) -> Option<String> {
+    find_rust_learned(name, None)
+}
+
+/// Recall a learned Rust body: prefer exact examples fingerprint match, else name.
+pub fn find_rust_learned(
+    name: &str,
+    examples: Option<&[crate::benchmark::Example]>,
+) -> Option<String> {
     let path = rust_learned_path()?;
     if !path.is_file() {
         return None;
     }
+    let rows = load_rust_learned(&path);
+    if let Some(exs) = examples.filter(|e| e.len() >= 2) {
+        let fp = examples_fingerprint(exs);
+        if let Some(hit) = rows.iter().rev().find(|r| !r.examples_fp.is_empty() && r.examples_fp == fp)
+        {
+            return Some(hit.code.clone());
+        }
+    }
     let want = name.to_ascii_lowercase();
-    load_rust_learned(&path)
-        .into_iter()
+    rows.into_iter()
         .rev()
         .find(|r| r.name.to_ascii_lowercase() == want)
         .map(|r| r.code)
@@ -988,6 +1044,26 @@ mod characterization {
             find_rust_learned_by_name("DOUBLE").as_deref().map(|s| s.contains("a0 * 2")),
             Some(true)
         );
+        // Fingerprint recall: different name, same examples → hit by fp.
+        use crate::benchmark::{Example, Value};
+        let exs = vec![
+            Example {
+                inputs: vec![Value::Int(2)],
+                expected: Value::Int(4),
+            },
+            Example {
+                inputs: vec![Value::Int(3)],
+                expected: Value::Int(6),
+            },
+        ];
+        append_rust_learned_ex(
+            "other_name",
+            "double via fp",
+            "fn other_name(x: i64) -> i64 { x * 2 }",
+            Some(&exs),
+        );
+        let by_fp = find_rust_learned("unused", Some(&exs)).expect("fp recall");
+        assert!(by_fp.contains("x * 2"), "{by_fp}");
         let tmp_crate = std::env::temp_dir().join(format!("nsynth_rust_apply_{id}"));
         let _ = std::fs::remove_dir_all(&tmp_crate);
         std::fs::create_dir_all(tmp_crate.join("src")).unwrap();
