@@ -1145,6 +1145,10 @@ enum DualAccum {
     SumSeventhPowersEvenNonZero,
     /// Sum of seventh powers of odd-valued non-zero elements.
     SumSeventhPowersOddNonZero,
+    /// Product of seventh powers of even-valued non-zero elements (none → 1).
+    ProductSeventhPowersEvenNonZero,
+    /// Product of seventh powers of odd-valued non-zero elements (none → 1).
+    ProductSeventhPowersOddNonZero,
 }
 
 impl DualAccum {
@@ -1370,6 +1374,8 @@ impl DualAccum {
             DualAccum::MeanSixthPowersOddNonZeroTrunc => "mean_sixth_powers_odd_non_zero_trunc",
             DualAccum::SumSeventhPowersEvenNonZero => "sum_seventh_powers_even_non_zero",
             DualAccum::SumSeventhPowersOddNonZero => "sum_seventh_powers_odd_non_zero",
+            DualAccum::ProductSeventhPowersEvenNonZero => "product_seventh_powers_even_non_zero",
+            DualAccum::ProductSeventhPowersOddNonZero => "product_seventh_powers_odd_non_zero",
         }
     }
 
@@ -1558,7 +1564,9 @@ impl DualAccum {
                 | DualAccum::ProductFifthPowersEvenNonZero
                 | DualAccum::ProductFifthPowersOddNonZero
                 | DualAccum::ProductSixthPowersEvenNonZero
-                | DualAccum::ProductSixthPowersOddNonZero => Some(1),
+                | DualAccum::ProductSixthPowersOddNonZero
+                | DualAccum::ProductSeventhPowersEvenNonZero
+                | DualAccum::ProductSeventhPowersOddNonZero => Some(1),
                 DualAccum::SumCubes
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
@@ -3253,6 +3261,24 @@ impl DualAccum {
                         s.saturating_mul(s).saturating_mul(s).saturating_mul(x)
                     })
                     .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::ProductSeventhPowersEvenNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(s).saturating_mul(x)
+                    })
+                    .fold(1i64, i64::saturating_mul),
+            ),
+            DualAccum::ProductSeventhPowersOddNonZero => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0 && x != 0)
+                    .map(|&x| {
+                        let s = x.saturating_mul(x);
+                        s.saturating_mul(s).saturating_mul(s).saturating_mul(x)
+                    })
+                    .fold(1i64, i64::saturating_mul),
             ),
         }
     }
@@ -6405,6 +6431,34 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+            DualAccum::ProductSeventhPowersEvenNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                prod = prod * sq * sq * sq * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
+            DualAccum::ProductSeventhPowersOddNonZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                sq: i64 = item * item;\n\
+                prod = prod * sq * sq * sq * item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
 
         }
     }
@@ -7582,6 +7636,8 @@ fn try_dual_and_pairwise(
         DualAccum::MeanSixthPowersOddNonZeroTrunc,
         DualAccum::SumSeventhPowersEvenNonZero,
         DualAccum::SumSeventhPowersOddNonZero,
+        DualAccum::ProductSeventhPowersEvenNonZero,
+        DualAccum::ProductSeventhPowersOddNonZero,
     ] {
         let ok = inputs
             .iter()
@@ -10143,6 +10199,8 @@ enum KClosed {
     MeanNonZeroDivisibleByKTrunc,
     /// Max of |v| for non-zero elements divisible by k (none → 0; k == 0 → None).
     MaxAbsNonZeroDivisibleByK,
+    /// Min of |v| for non-zero elements divisible by k (none → 0; k == 0 → None).
+    MinAbsNonZeroDivisibleByK,
 }
 
 impl KClosed {
@@ -10275,6 +10333,7 @@ impl KClosed {
             KClosed::AbsProductNonZeroDivisibleByK => "abs_product_non_zero_divisible_by_k",
             KClosed::MeanNonZeroDivisibleByKTrunc => "mean_non_zero_divisible_by_k_trunc",
             KClosed::MaxAbsNonZeroDivisibleByK => "max_abs_non_zero_divisible_by_k",
+            KClosed::MinAbsNonZeroDivisibleByK => "min_abs_non_zero_divisible_by_k",
         }
     }
 
@@ -11334,6 +11393,19 @@ impl KClosed {
                     if v != 0 && v % k == 0 {
                         let a = v.abs();
                         best = Some(best.map_or(a, |b| b.max(a)));
+                    }
+                }
+                Some(best.unwrap_or(0))
+            }
+            KClosed::MinAbsNonZeroDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                let mut best: Option<i64> = None;
+                for &v in arr {
+                    if v != 0 && v % k == 0 {
+                        let a = v.abs();
+                        best = Some(best.map_or(a, |b| b.min(a)));
                     }
                 }
                 Some(best.unwrap_or(0))
@@ -13192,6 +13264,28 @@ KClosed::MinWhereAbsNeK => format!(
     return best;\n\
 }}\n"
             ),
+            KClosed::MinAbsNonZeroDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    found: i64 = 0;\n\
+    best: i64 = 0;\n\
+    for item in arr {{\n\
+        if item != 0 {{\n\
+            if item % k == 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                if found == 0 {{\n\
+                    best = a;\n\
+                    found = 1;\n\
+                }}\n\
+                if a < best {{\n\
+                    best = a;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
 
         }
     }
@@ -13332,6 +13426,7 @@ fn try_k_closed(
         KClosed::AbsProductNonZeroDivisibleByK,
         KClosed::MeanNonZeroDivisibleByKTrunc,
         KClosed::MaxAbsNonZeroDivisibleByK,
+        KClosed::MinAbsNonZeroDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -14762,5 +14857,9 @@ mod tests {
         assert_eq!(DualAccum::SumSeventhPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(-2186));
         assert_eq!(DualAccum::SumSeventhPowersEvenNonZero.eval(&[0, 1, 3]), Some(0));
         assert_eq!(KClosed::MaxAbsNonZeroDivisibleByK.eval(&[0, -8, 4, 3], 2), Some(8));
+        assert_eq!(DualAccum::ProductSeventhPowersEvenNonZero.eval(&[0, -2, 2, 3]), Some(-16384));
+        assert_eq!(DualAccum::ProductSeventhPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(-2187));
+        assert_eq!(DualAccum::ProductSeventhPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
+        assert_eq!(KClosed::MinAbsNonZeroDivisibleByK.eval(&[0, -8, 4, 3], 2), Some(4));
     }
 }
