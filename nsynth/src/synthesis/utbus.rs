@@ -735,8 +735,12 @@ enum DualAccum {
     AbsSum,
     /// Maximum absolute value.
     MaxAbs,
-    /// Minimum strictly-positive element (none → None).
+    /// Minimum strictly-positive element (none → 0).
     MinPositive,
+    /// Count of negative elements.
+    CountNegatives,
+    /// Count of even elements.
+    CountEvens,
 }
 
 impl DualAccum {
@@ -758,6 +762,8 @@ impl DualAccum {
             DualAccum::AbsSum => "abs_sum",
             DualAccum::MaxAbs => "max_abs",
             DualAccum::MinPositive => "min_positive",
+            DualAccum::CountNegatives => "count_negatives",
+            DualAccum::CountEvens => "count_evens",
         }
     }
 
@@ -924,6 +930,12 @@ impl DualAccum {
                     }
                 }
                 Some(best)
+            }
+            DualAccum::CountNegatives => {
+                Some(arr.iter().filter(|&&x| x < 0).count() as i64)
+            }
+            DualAccum::CountEvens => {
+                Some(arr.iter().filter(|&&x| x % 2 == 0).count() as i64)
             }
         }
     }
@@ -1151,6 +1163,24 @@ impl DualAccum {
         }}\n\
     }}\n\
     return best;\n\
+}}\n"
+            ),
+            DualAccum::CountNegatives => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{ count = count + 1; }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            DualAccum::CountEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{ count = count + 1; }}\n\
+    }}\n\
+    return count;\n\
 }}\n"
             ),
         }
@@ -1554,6 +1584,8 @@ fn try_dual_and_pairwise(
         DualAccum::AbsSum,
         DualAccum::MaxAbs,
         DualAccum::MinPositive,
+        DualAccum::CountNegatives,
+        DualAccum::CountEvens,
     ] {
         let ok = inputs
             .iter()
@@ -3052,5 +3084,7 @@ mod tests {
         assert_eq!(DualAccum::MaxAbs.eval(&[3, -2]), Some(3));
         assert_eq!(DualAccum::MinPositive.eval(&[-2, 5, 3, 0]), Some(3));
         assert_eq!(DualAccum::MinPositive.eval(&[-1, 0]), Some(0));
+        assert_eq!(DualAccum::CountNegatives.eval(&[-1, 2, -3, 0]), Some(2));
+        assert_eq!(DualAccum::CountEvens.eval(&[1, 2, 3, 4, 0]), Some(3));
     }
 }
