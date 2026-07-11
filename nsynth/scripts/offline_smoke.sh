@@ -454,6 +454,10 @@ fn dual_or_all(arr: &[i64]) -> i64 {
     arr.iter().copied().fold(0, |a, b| a | b)
 }
 
+fn dual_and_all(arr: &[i64]) -> i64 {
+    arr.iter().copied().fold(-1i64, |a, b| a & b)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -802,6 +806,11 @@ fn pairwise_sum_sq_diff(arr: &[i64]) -> i64 {
     total
 }
 
+fn pairwise_mean_sq_diff_trunc(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    pairwise_sum_sq_diff(arr) / ((arr.len() - 1) as i64)
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -971,6 +980,20 @@ fn k_sum_le(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v <= k).copied().sum()
 }
 
+fn k_first_ge(arr: &[i64], k: i64) -> i64 {
+    for (i, &v) in arr.iter().enumerate() {
+        if v >= k { return i as i64; }
+    }
+    -1
+}
+
+fn k_first_le(arr: &[i64], k: i64) -> i64 {
+    for (i, &v) in arr.iter().enumerate() {
+        if v <= k { return i as i64; }
+    }
+    -1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1138,6 +1161,7 @@ mod tests {
         assert_eq!(dual_xor_all(&[1, 2, 3]), 0);
         assert_eq!(dual_product_non_zeros(&[0, 2, 3, 0]), 6);
         assert_eq!(dual_or_all(&[1, 2, 4]), 7);
+        assert_eq!(dual_and_all(&[7, 3, 1]), 1);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1169,6 +1193,8 @@ mod tests {
         assert_eq!(k_count_le(&[1, 5, 3, 2], 3), 3);
         assert_eq!(k_sum_ge(&[1, 5, 3, 2], 3), 8);
         assert_eq!(k_sum_le(&[1, 5, 3, 2], 3), 6);
+        assert_eq!(k_first_ge(&[1, 5, 3, 2], 3), 1);
+        assert_eq!(k_first_le(&[5, 4, 1, 2], 2), 2);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1215,6 +1241,7 @@ mod tests {
         assert_eq!(pairwise_mean_abs_diff_trunc(&[1, 4, 2]), 2);
         assert_eq!(pairwise_count_sign_changes(&[1, 3, 2, 5, 0]), 3);
         assert_eq!(pairwise_sum_sq_diff(&[1, 4, 2]), 13);
+        assert_eq!(pairwise_mean_sq_diff_trunc(&[1, 4, 2]), 6);
     }
 }
 EOF
@@ -1295,6 +1322,14 @@ fn filter_len_lt3(s: &str, sep: &str) -> String {
 
 fn filter_len_eq4(s: &str, sep: &str) -> String {
     s.split(sep).filter(|w| w.chars().count() == 4).collect::<Vec<_>>().join(sep)
+}
+
+fn filter_len_gt4(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() > 4).collect::<Vec<_>>().join(sep)
+}
+
+fn filter_len_lt4(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() < 4).collect::<Vec<_>>().join(sep)
 }
 
 fn dedup_all(s: &str, sep: &str) -> String {
@@ -1406,6 +1441,10 @@ fn digit_product(s: &str) -> i64 {
     if digits.is_empty() { 1 } else { digits.iter().product() }
 }
 
+fn punctuation_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_punctuation()).count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1437,6 +1476,8 @@ mod tests {
         assert_eq!(filter_len_eq3("cat dog hi me", " "), "cat dog");
         assert_eq!(filter_len_lt3("cat dog hi me", " "), "hi me");
         assert_eq!(filter_len_eq4("a to the moon", " "), "moon");
+        assert_eq!(filter_len_gt4("a to the moons", " "), "moons");
+        assert_eq!(filter_len_lt4("cat dog hi me", " "), "cat dog hi me");
         assert_eq!(dedup_all("a b a c b", " "), "a b c");
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
@@ -1456,6 +1497,7 @@ mod tests {
         assert_eq!(cap_first_word("hello world", " "), "Hello world");
         assert_eq!(digit_sum("a12b3"), 6);
         assert_eq!(digit_product("a23b"), 6);
+        assert_eq!(punctuation_count("Hi, you!"), 2);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

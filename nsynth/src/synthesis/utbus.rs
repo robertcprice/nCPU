@@ -823,6 +823,8 @@ enum DualAccum {
     ProductNonZeros,
     /// Bitwise OR of all elements (empty → 0).
     OrAll,
+    /// Bitwise AND of all elements (empty → -1).
+    AndAll,
 }
 
 impl DualAccum {
@@ -887,6 +889,7 @@ impl DualAccum {
             DualAccum::XorAll => "xor_all",
             DualAccum::ProductNonZeros => "product_non_zeros",
             DualAccum::OrAll => "or_all",
+            DualAccum::AndAll => "and_all",
         }
     }
 
@@ -936,6 +939,7 @@ impl DualAccum {
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
                 | DualAccum::OrAll => Some(0),
+                DualAccum::AndAll => Some(-1),
                 DualAccum::IsPalindrome => Some(1),
                 DualAccum::MeanAbsTrunc
                 | DualAccum::MeanTrunc
@@ -1360,6 +1364,7 @@ impl DualAccum {
                     .fold(1i64, i64::saturating_mul),
             ),
             DualAccum::OrAll => Some(arr.iter().copied().fold(0i64, |a, b| a | b)),
+            DualAccum::AndAll => Some(arr.iter().copied().fold(-1i64, |a, b| a & b)),
         }
     }
 
@@ -2053,6 +2058,15 @@ impl DualAccum {
     return total;\n\
 }}\n"
             ),
+            DualAccum::AndAll => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0 - 1;\n\
+    for item in arr {{\n\
+        total = total & item;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2112,6 +2126,8 @@ enum PairwiseScan {
     CountSignChanges,
     /// Sum of squared adjacent diffs `(arr[i]-arr[i-1])^2`.
     SumSqDiff,
+    /// Truncating mean of squared adjacent diffs (len<2 → 0).
+    MeanSqDiffTrunc,
 }
 
 impl PairwiseScan {
@@ -2143,6 +2159,7 @@ impl PairwiseScan {
             PairwiseScan::MeanAbsDiffTrunc => "mean_abs_diff_trunc",
             PairwiseScan::CountSignChanges => "count_sign_changes",
             PairwiseScan::SumSqDiff => "sum_sq_diff",
+            PairwiseScan::MeanSqDiffTrunc => "mean_sq_diff_trunc",
         }
     }
 
@@ -2481,6 +2498,17 @@ impl PairwiseScan {
                     total = total.saturating_add(d.saturating_mul(d));
                 }
                 Some(total)
+            }
+            PairwiseScan::MeanSqDiffTrunc => {
+                if arr.len() < 2 {
+                    return Some(0);
+                }
+                let mut total = 0i64;
+                for i in 1..arr.len() {
+                    let d = arr[i].saturating_sub(arr[i - 1]);
+                    total = total.saturating_add(d.saturating_mul(d));
+                }
+                Some(total / ((arr.len() - 1) as i64))
             }
         }
     }
@@ -2867,6 +2895,19 @@ impl PairwiseScan {
     return total;\n\
 }}\n"
             ),
+            PairwiseScan::MeanSqDiffTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len < 2 {{ return 0; }}\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        d: i64 = arr[i] - arr[i - 1];\n\
+        total = total + d * d;\n\
+        i = i + 1;\n\
+    }}\n\
+    return total / (arr.len - 1);\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2937,6 +2978,7 @@ fn try_dual_and_pairwise(
         DualAccum::XorAll,
         DualAccum::ProductNonZeros,
         DualAccum::OrAll,
+        DualAccum::AndAll,
     ] {
         let ok = inputs
             .iter()
@@ -2983,6 +3025,7 @@ fn try_dual_and_pairwise(
         PairwiseScan::MeanAbsDiffTrunc,
         PairwiseScan::CountSignChanges,
         PairwiseScan::SumSqDiff,
+        PairwiseScan::MeanSqDiffTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -3756,6 +3799,10 @@ enum KClosed {
     SumGeK,
     /// Sum of elements ≤ `k`.
     SumLeK,
+    /// First index where `arr[i] >= k`, else -1.
+    FirstGeK,
+    /// First index where `arr[i] <= k`, else -1.
+    FirstLeK,
 }
 
 impl KClosed {
@@ -3783,6 +3830,8 @@ impl KClosed {
             KClosed::CountLeK => "count_le_k",
             KClosed::SumGeK => "sum_ge_k",
             KClosed::SumLeK => "sum_le_k",
+            KClosed::FirstGeK => "first_ge_k",
+            KClosed::FirstLeK => "first_le_k",
         }
     }
 
@@ -3922,6 +3971,22 @@ impl KClosed {
                     .copied()
                     .fold(0i64, i64::saturating_add),
             ),
+            KClosed::FirstGeK => {
+                for (i, &v) in arr.iter().enumerate() {
+                    if v >= k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::FirstLeK => {
+                for (i, &v) in arr.iter().enumerate() {
+                    if v <= k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
         }
     }
 
@@ -4181,6 +4246,30 @@ impl KClosed {
     return total;\n\
 }}\n"
             ),
+            KClosed::FirstGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        if arr[i] >= k {{\n\
+            return i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
+            KClosed::FirstLeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        if arr[i] <= k {{\n\
+            return i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4215,6 +4304,8 @@ fn try_k_closed(
         KClosed::CountLeK,
         KClosed::SumGeK,
         KClosed::SumLeK,
+        KClosed::FirstGeK,
+        KClosed::FirstLeK,
     ] {
         let ok = inputs
             .iter()
@@ -5274,5 +5365,10 @@ mod tests {
         assert_eq!(KClosed::CountLeK.eval(&[1, 5, 3, 2], 3), Some(3));
         assert_eq!(KClosed::SumGeK.eval(&[1, 5, 3, 2], 3), Some(8));
         assert_eq!(KClosed::SumLeK.eval(&[1, 5, 3, 2], 3), Some(6));
+        assert_eq!(DualAccum::AndAll.eval(&[7, 3, 1]), Some(1));
+        assert_eq!(DualAccum::AndAll.eval(&[]), Some(-1));
+        assert_eq!(PairwiseScan::MeanSqDiffTrunc.eval(&[1, 4, 2]), Some(6));
+        assert_eq!(KClosed::FirstGeK.eval(&[1, 5, 3, 2], 3), Some(1));
+        assert_eq!(KClosed::FirstLeK.eval(&[5, 4, 1, 2], 2), Some(2));
     }
 }
