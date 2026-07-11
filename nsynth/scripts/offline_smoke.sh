@@ -555,6 +555,20 @@ fn dedup_adjacent(s: &str, sep: &str) -> String {
     out.join(sep)
 }
 
+fn swap_first_last(s: &str, sep: &str) -> String {
+    let mut words: Vec<&str> = s.split(sep).collect();
+    if words.len() < 2 { return s.to_string(); }
+    let last = words.len() - 1;
+    words.swap(0, last);
+    words.join(sep)
+}
+
+fn drop_first(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { return String::new(); }
+    words[1..].join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +582,8 @@ mod tests {
     fn filter_and_dedup() {
         assert_eq!(filter_len_gt2("a to the moon", " "), "the moon");
         assert_eq!(dedup_adjacent("hi hi there there hi", " "), "hi there hi");
+        assert_eq!(swap_first_last("one two three", " "), "three two one");
+        assert_eq!(drop_first("keep the rest", " "), "the rest");
     }
 }
 EOF
