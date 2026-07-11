@@ -832,6 +832,8 @@ enum WordShape {
     JoinWithPercent,
     /// Join words with '&' regardless of input sep.
     JoinWithAmpersand,
+    /// Join words with '^' regardless of input sep.
+    JoinWithCaret,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -916,6 +918,7 @@ impl WordShape {
             WordShape::JoinWithStar => "join_with_star",
             WordShape::JoinWithPercent => "join_with_percent",
             WordShape::JoinWithAmpersand => "join_with_ampersand",
+            WordShape::JoinWithCaret => "join_with_caret",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1318,6 +1321,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithStar => words.join("*"),
         WordShape::JoinWithPercent => words.join("%"),
         WordShape::JoinWithAmpersand => words.join("&"),
+        WordShape::JoinWithCaret => words.join("^"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1562,6 +1566,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithAmpersand => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"&\");\n}}\n"
         ),
+        WordShape::JoinWithCaret => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"^\");\n}}\n"
+        ),
 WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1592,7 +1599,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 77] = [
+    const SHAPES: [WordShape; 78] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1668,6 +1675,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithStar,
         WordShape::JoinWithPercent,
         WordShape::JoinWithAmpersand,
+        WordShape::JoinWithCaret,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -3596,6 +3604,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-esc_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Delete count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x7f').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x7f\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-del_count".to_string(),
                 error: None,
             });
         }
