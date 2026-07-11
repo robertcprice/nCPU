@@ -764,6 +764,8 @@ enum WordShape {
     DropFirstTwo,
     /// Drop the first three words, rejoin.
     DropFirstThree,
+    /// Drop the first four words, rejoin.
+    DropFirstFour,
     /// Keep only the last two words.
     TakeLastTwo,
     /// Keep only the last three words.
@@ -834,6 +836,7 @@ impl WordShape {
             WordShape::TakeFirstFour => "take_first_four",
             WordShape::DropFirstTwo => "drop_first_two",
             WordShape::DropFirstThree => "drop_first_three",
+            WordShape::DropFirstFour => "drop_first_four",
             WordShape::TakeLastTwo => "take_last_two",
             WordShape::TakeLastThree => "take_last_three",
             WordShape::DropLastTwo => "drop_last_two",
@@ -1091,6 +1094,13 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[3..].join(sep)
             }
         }
+        WordShape::DropFirstFour => {
+            if words.len() <= 4 {
+                String::new()
+            } else {
+                words[4..].join(sep)
+            }
+        }
         WordShape::TakeLastTwo => {
             if words.len() <= 2 {
                 words.join(sep)
@@ -1301,7 +1311,10 @@ WordShape::DropFirstTwo => format!(
         WordShape::DropFirstThree => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 3;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
-        WordShape::TakeLastTwo => format!(
+                WordShape::DropFirstFour => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 4;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+WordShape::TakeLastTwo => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 2 {{\n        start = words.len - 2;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::TakeLastThree => format!(
@@ -1361,7 +1374,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 53] = [
+    const SHAPES: [WordShape; 54] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1403,6 +1416,7 @@ pub fn synthesize_word_program(
         WordShape::TakeFirstFour,
         WordShape::DropFirstTwo,
         WordShape::DropFirstThree,
+        WordShape::DropFirstFour,
         WordShape::TakeLastTwo,
         WordShape::TakeLastThree,
         WordShape::DropLastTwo,
@@ -2669,6 +2683,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-hash_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Percent-sign count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '%').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"%\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-percent_count".to_string(),
                 error: None,
             });
         }

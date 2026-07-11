@@ -541,6 +541,10 @@ fn dual_sum_non_positives(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x <= 0).sum()
 }
 
+fn dual_count_non_positives(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x <= 0).count() as i64
+}
+
 fn dual_min_abs(arr: &[i64]) -> i64 {
     arr.iter().map(|&x| x.abs()).min().unwrap_or(0)
 }
@@ -1185,6 +1189,26 @@ fn index_sum_nonzero_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v != 0).map(|(_,&v)| v).sum()
 }
 
+fn index_max_nonzero_even(arr: &[i64]) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for (i,&v) in arr.iter().enumerate() {
+        if i%2==0 && v != 0 {
+            if !found || v > best { best = v; found = true; }
+        }
+    }
+    best
+}
+
+fn index_max_nonzero_odd(arr: &[i64]) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for (i,&v) in arr.iter().enumerate() {
+        if i%2==1 && v != 0 {
+            if !found || v > best { best = v; found = true; }
+        }
+    }
+    best
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1331,6 +1355,10 @@ fn k_count_abs_eq(arr: &[i64], k: i64) -> i64 {
 
 fn k_count_abs_ne(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v.abs() != k).count() as i64
+}
+
+fn k_sum_abs_ne(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v.abs() != k).map(|&v| v.abs()).sum()
 }
 
 fn k_sum_abs_eq(arr: &[i64], k: i64) -> i64 {
@@ -1581,6 +1609,7 @@ mod tests {
         assert_eq!(dual_product_non_negatives(&[-2, 3, 0, 4]), 0);
         assert_eq!(dual_sum_non_negatives(&[-2, 3, 0, 4]), 7);
         assert_eq!(dual_sum_non_positives(&[-2, 3, 0, 4]), -2);
+        assert_eq!(dual_count_non_positives(&[-2, 3, 0, 4]), 2);
         assert_eq!(dual_min_abs(&[-3, 9, 2]), 2);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
@@ -1648,6 +1677,9 @@ mod tests {
         assert_eq!(index_sum_nonzero_even(&[0, 9, -3, 8]), -3);
         assert_eq!(index_sum_nonzero_odd(&[0, 9, -3, 8]), 17);
         assert_eq!(k_count_abs_ne(&[-5, 2, 5, 4], 5), 2);
+        assert_eq!(index_max_nonzero_even(&[0, 9, -3, 8]), -3);
+        assert_eq!(index_max_nonzero_odd(&[0, 9, -3, 8]), 9);
+        assert_eq!(k_sum_abs_ne(&[-5, 2, 5, 4], 5), 6);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1899,6 +1931,11 @@ fn drop_first_three(s: &str, sep: &str) -> String {
     if words.len() <= 3 { String::new() } else { words[3..].join(sep) }
 }
 
+fn drop_first_four(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 4 { String::new() } else { words[4..].join(sep) }
+}
+
 fn take_last_two(s: &str, sep: &str) -> String {
     let words: Vec<&str> = s.split(sep).collect();
     if words.len() <= 2 { words.join(sep) } else { words[words.len()-2..].join(sep) }
@@ -2077,6 +2114,10 @@ fn hash_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '#').count() as i64
 }
 
+fn percent_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '%').count() as i64
+}
+
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
@@ -2128,6 +2169,7 @@ mod tests {
         assert_eq!(take_first_four("one two three four five", " "), "one two three four");
         assert_eq!(drop_first_two("one two three four", " "), "three four");
         assert_eq!(drop_first_three("one two three four five", " "), "four five");
+        assert_eq!(drop_first_four("one two three four five six", " "), "five six");
         assert_eq!(take_last_two("one two three four", " "), "three four");
         assert_eq!(take_last_three("one two three four", " "), "two three four");
         assert_eq!(drop_last_two("one two three four", " "), "one two");
@@ -2165,6 +2207,7 @@ mod tests {
         assert_eq!(exclamation_count("a!b!!c"), 3);
         assert_eq!(at_count("a@b@@c"), 3);
         assert_eq!(hash_count("a#b##c"), 3);
+        assert_eq!(percent_count("a%b%%c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
