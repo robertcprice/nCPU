@@ -726,6 +726,8 @@ enum WordShape {
     FilterLenEq3,
     /// Keep words with length < 3.
     FilterLenLt3,
+    /// Keep words with length == 4.
+    FilterLenEq4,
     /// Dedup all words preserving first-occurrence order.
     DedupAll,
     /// Sort words by ascending character length (stable on ties via sort_by_key).
@@ -742,6 +744,8 @@ enum WordShape {
     CapLastWord,
     /// Reverse characters of the first word only.
     ReverseFirstWord,
+    /// Capitalize only the first word (first char upper).
+    CapFirstWord,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -773,6 +777,7 @@ impl WordShape {
             WordShape::FilterLenGt3 => "filter_len_gt3",
             WordShape::FilterLenEq3 => "filter_len_eq3",
             WordShape::FilterLenLt3 => "filter_len_lt3",
+            WordShape::FilterLenEq4 => "filter_len_eq4",
             WordShape::DedupAll => "dedup_all",
             WordShape::SortByLen => "sort_by_len",
             WordShape::TakeFirstTwo => "take_first_two",
@@ -781,6 +786,7 @@ impl WordShape {
             WordShape::DropLastTwo => "drop_last_two",
             WordShape::CapLastWord => "cap_last_word",
             WordShape::ReverseFirstWord => "reverse_first_word",
+            WordShape::CapFirstWord => "cap_first_word",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -931,6 +937,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .filter(|w| w.chars().count() < 3)
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::FilterLenEq4 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 4)
+            .collect::<Vec<_>>()
+            .join(sep),
         WordShape::DedupAll => {
             let mut out: Vec<&str> = Vec::new();
             for w in words {
@@ -986,6 +997,15 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             } else {
                 let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
                 out[0] = out[0].chars().rev().collect();
+                out.join(sep)
+            }
+        }
+        WordShape::CapFirstWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                out[0] = cap_first(&out[0]);
                 out.join(sep)
             }
         }
@@ -1074,6 +1094,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterLenLt3 => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::FilterLenEq4 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 4 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::DedupAll => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1097,6 +1120,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         ),
         WordShape::ReverseFirstWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    out.push(words[0].reverse());\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::CapFirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    w: string = words[0];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
@@ -1128,7 +1154,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 32] = [
+    const SHAPES: [WordShape; 34] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1151,6 +1177,7 @@ pub fn synthesize_word_program(
         WordShape::FilterLenGt3,
         WordShape::FilterLenEq3,
         WordShape::FilterLenLt3,
+        WordShape::FilterLenEq4,
         WordShape::DedupAll,
         WordShape::SortByLen,
         WordShape::TakeFirstTwo,
@@ -1159,6 +1186,7 @@ pub fn synthesize_word_program(
         WordShape::DropLastTwo,
         WordShape::CapLastWord,
         WordShape::ReverseFirstWord,
+        WordShape::CapFirstWord,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -1765,6 +1793,50 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-digit_sum".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Product of digit character values (e.g. "a23" → 2*3=6; no digits → 1).
+    if examples.iter().all(|(s, o)| {
+        let digits: Vec<i64> = s
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .map(|c| (c as u8 - b'0') as i64)
+            .collect();
+        let prod = if digits.is_empty() {
+            1
+        } else {
+            digits.iter().product()
+        };
+        prod == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    total: i64 = 1;\n\
+    found: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                total = total * (c.ord() - \"0\".ord());\n\
+                found = 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    if found == 0 {{\n\
+        return 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_product".to_string(),
                 error: None,
             });
         }

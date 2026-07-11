@@ -446,6 +446,14 @@ fn dual_xor_all(arr: &[i64]) -> i64 {
     arr.iter().copied().fold(0, |a, b| a ^ b)
 }
 
+fn dual_product_non_zeros(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x != 0).fold(1i64, |a, &b| a.saturating_mul(b))
+}
+
+fn dual_or_all(arr: &[i64]) -> i64 {
+    arr.iter().copied().fold(0, |a, b| a | b)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -785,6 +793,15 @@ fn pairwise_count_sign_changes(arr: &[i64]) -> i64 {
     count
 }
 
+fn pairwise_sum_sq_diff(arr: &[i64]) -> i64 {
+    let mut total = 0i64;
+    for i in 1..arr.len() {
+        let d = arr[i] - arr[i - 1];
+        total += d * d;
+    }
+    total
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -858,6 +875,14 @@ fn index_count_odd_indices(arr: &[i64]) -> i64 {
     (arr.len() / 2) as i64
 }
 
+fn index_xor_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==0).fold(0i64, |a, (_,&v)| a ^ v)
+}
+
+fn index_xor_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==1).fold(0i64, |a, (_,&v)| a ^ v)
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -928,6 +953,22 @@ fn k_min_lt(arr: &[i64], k: i64) -> Option<i64> {
         }
     }
     best
+}
+
+fn k_count_ge(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v >= k).count() as i64
+}
+
+fn k_count_le(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v <= k).count() as i64
+}
+
+fn k_sum_ge(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v >= k).copied().sum()
+}
+
+fn k_sum_le(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v <= k).copied().sum()
 }
 
 #[cfg(test)]
@@ -1095,6 +1136,8 @@ mod tests {
         assert_eq!(dual_sum_sq_diff_mean(&[1, 2, 3]), Some(2));
         assert_eq!(dual_any_non_zero(&[0, 0, 1]), 1);
         assert_eq!(dual_xor_all(&[1, 2, 3]), 0);
+        assert_eq!(dual_product_non_zeros(&[0, 2, 3, 0]), 6);
+        assert_eq!(dual_or_all(&[1, 2, 4]), 7);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1122,6 +1165,12 @@ mod tests {
         assert_eq!(k_sum_ne(&[1, 5, 5, 2], 5), 3);
         assert_eq!(k_max_gt(&[1, 5, 3, 2], 2), Some(5));
         assert_eq!(k_min_lt(&[1, 5, 3, 2], 4), Some(1));
+        assert_eq!(k_count_ge(&[1, 5, 3, 2], 3), 2);
+        assert_eq!(k_count_le(&[1, 5, 3, 2], 3), 3);
+        assert_eq!(k_sum_ge(&[1, 5, 3, 2], 3), 8);
+        assert_eq!(k_sum_le(&[1, 5, 3, 2], 3), 6);
+        assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
+        assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -1165,6 +1214,7 @@ mod tests {
         assert_eq!(pairwise_min_decrease(&[9, 2, 8, 1]), 7);
         assert_eq!(pairwise_mean_abs_diff_trunc(&[1, 4, 2]), 2);
         assert_eq!(pairwise_count_sign_changes(&[1, 3, 2, 5, 0]), 3);
+        assert_eq!(pairwise_sum_sq_diff(&[1, 4, 2]), 13);
     }
 }
 EOF
@@ -1241,6 +1291,10 @@ fn filter_len_eq3(s: &str, sep: &str) -> String {
 
 fn filter_len_lt3(s: &str, sep: &str) -> String {
     s.split(sep).filter(|w| w.chars().count() < 3).collect::<Vec<_>>().join(sep)
+}
+
+fn filter_len_eq4(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() == 4).collect::<Vec<_>>().join(sep)
 }
 
 fn dedup_all(s: &str, sep: &str) -> String {

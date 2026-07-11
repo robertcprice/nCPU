@@ -445,7 +445,7 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         });
                     }
                     // FILTER by absolute length thresholds (short / long words).
-                    for tag in ["gt1", "gt2", "eq1", "lt2", "eq2", "gt3", "eq3", "lt3"] {
+                    for tag in ["gt1", "gt2", "eq1", "lt2", "eq2", "gt3", "eq3", "lt3", "eq4", "gt4", "lt4"] {
                         let outs: Vec<V> = e
                             .outs
                             .iter()
@@ -459,10 +459,13 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                                                 "gt1" => n > 1,
                                                 "gt2" => n > 2,
                                                 "gt3" => n > 3,
+                                                "gt4" => n > 4,
                                                 "lt2" => n < 2,
                                                 "lt3" => n < 3,
+                                                "lt4" => n < 4,
                                                 "eq2" => n == 2,
                                                 "eq3" => n == 3,
+                                                "eq4" => n == 4,
                                                 _ => n == 1,
                                             }
                                         })
@@ -475,10 +478,13 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             "gt1" => "w.len > 1",
                             "gt2" => "w.len > 2",
                             "gt3" => "w.len > 3",
+                            "gt4" => "w.len > 4",
                             "lt2" => "w.len < 2",
                             "lt3" => "w.len < 3",
+                            "lt4" => "w.len < 4",
                             "eq2" => "w.len == 2",
                             "eq3" => "w.len == 3",
+                            "eq4" => "w.len == 4",
                             _ => "w.len == 1",
                         };
                         let mut helpers = e.helpers.clone();
