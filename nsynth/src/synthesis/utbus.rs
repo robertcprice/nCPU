@@ -957,6 +957,10 @@ enum DualAccum {
     CountNegativeEvens,
     /// Count of negative odd-valued elements.
     CountNegativeOdds,
+    /// Sum of positive even-valued elements.
+    SumPositiveEvens,
+    /// Sum of positive odd-valued elements.
+    SumPositiveOdds,
 }
 
 impl DualAccum {
@@ -1088,6 +1092,8 @@ impl DualAccum {
             DualAccum::CountPositiveOdds => "count_positive_odds",
             DualAccum::CountNegativeEvens => "count_negative_evens",
             DualAccum::CountNegativeOdds => "count_negative_odds",
+            DualAccum::SumPositiveEvens => "sum_positive_evens",
+            DualAccum::SumPositiveOdds => "sum_positive_odds",
         }
     }
 
@@ -1135,6 +1141,8 @@ impl DualAccum {
                 | DualAccum::CountPositiveOdds
                 | DualAccum::CountNegativeEvens
                 | DualAccum::CountNegativeOdds
+                | DualAccum::SumPositiveEvens
+                | DualAccum::SumPositiveOdds
                 | DualAccum::GcdAbsEvens
                 | DualAccum::GcdAbsOdds
                 | DualAccum::LcmAbsEvens
@@ -2095,6 +2103,18 @@ impl DualAccum {
             ),
             DualAccum::CountNegativeOdds => Some(
                 arr.iter().filter(|&&x| x < 0 && x % 2 != 0).count() as i64,
+            ),
+            DualAccum::SumPositiveEvens => Some(
+                arr.iter()
+                    .filter(|&&x| x > 0 && x % 2 == 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumPositiveOdds => Some(
+                arr.iter()
+                    .filter(|&&x| x > 0 && x % 2 != 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
             ),
         }
     }
@@ -3739,6 +3759,32 @@ DualAccum::SumSquaresOdds => format!(
     return n;\n\
 }}\n"
             ),
+            DualAccum::SumPositiveEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > 0 {{\n\
+            if item % 2 == 0 {{\n\
+                total = total + item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumPositiveOdds => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > 0 {{\n\
+            if item % 2 != 0 {{\n\
+                total = total + item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
 
 
         }
@@ -4823,6 +4869,8 @@ fn try_dual_and_pairwise(
         DualAccum::CountPositiveOdds,
         DualAccum::CountNegativeEvens,
         DualAccum::CountNegativeOdds,
+        DualAccum::SumPositiveEvens,
+        DualAccum::SumPositiveOdds,
     ] {
         let ok = inputs
             .iter()
@@ -7290,6 +7338,8 @@ enum KClosed {
     CountWhereAbsLeK,
     /// First element with |v| >= k (none → 0).
     FirstWhereAbsGeK,
+    /// Last element with |v| >= k (none → 0).
+    LastWhereAbsGeK,
 }
 
 impl KClosed {
@@ -7375,6 +7425,7 @@ impl KClosed {
             KClosed::CountWhereAbsGeK => "count_where_abs_ge_k",
             KClosed::CountWhereAbsLeK => "count_where_abs_le_k",
             KClosed::FirstWhereAbsGeK => "first_where_abs_ge_k",
+            KClosed::LastWhereAbsGeK => "last_where_abs_ge_k",
         }
     }
 
@@ -7976,6 +8027,13 @@ impl KClosed {
             KClosed::FirstWhereAbsGeK => Some(
                 arr.iter()
                     .copied()
+                    .find(|&v| v.abs() >= k)
+                    .unwrap_or(0),
+            ),
+            KClosed::LastWhereAbsGeK => Some(
+                arr.iter()
+                    .copied()
+                    .rev()
                     .find(|&v| v.abs() >= k)
                     .unwrap_or(0),
             ),
@@ -9089,6 +9147,21 @@ KClosed::MinWhereAbsNeK => format!(
     return 0;\n\
 }}\n"
             ),
+            KClosed::LastWhereAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = arr.len - 1;\n\
+    while i >= 0 {{\n\
+        item: i64 = arr[i];\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a >= k {{\n\
+            return item;\n\
+        }}\n\
+        i = i - 1;\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -9181,6 +9254,7 @@ fn try_k_closed(
         KClosed::CountWhereAbsGeK,
         KClosed::CountWhereAbsLeK,
         KClosed::FirstWhereAbsGeK,
+        KClosed::LastWhereAbsGeK,
     ] {
         let ok = inputs
             .iter()
@@ -10430,5 +10504,8 @@ mod tests {
         assert_eq!(DualAccum::CountNegativeEvens.eval(&[-2, 3, -4, 1]), Some(2));
         assert_eq!(DualAccum::CountNegativeOdds.eval(&[-2, 3, -1]), Some(1));
         assert_eq!(KClosed::FirstWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(-5));
+        assert_eq!(DualAccum::SumPositiveEvens.eval(&[-2, 3, 2, 4]), Some(6));
+        assert_eq!(DualAccum::SumPositiveOdds.eval(&[-2, 3, 1]), Some(4));
+        assert_eq!(KClosed::LastWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(4));
     }
 }

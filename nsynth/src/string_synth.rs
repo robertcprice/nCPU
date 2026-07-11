@@ -850,6 +850,7 @@ enum WordShape {
     JoinWithSpace,
     JoinWithPipe,
     JoinWithBrace,
+    JoinWithBracket,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -947,6 +948,7 @@ impl WordShape {
             WordShape::JoinWithSpace => "join_with_space",
             WordShape::JoinWithPipe => "join_with_pipe",
             WordShape::JoinWithBrace => "join_with_brace",
+            WordShape::JoinWithBracket => "join_with_bracket",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1362,6 +1364,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithSpace => words.join(" "),
         WordShape::JoinWithPipe => words.join("|"),
         WordShape::JoinWithBrace => words.join("{"),
+        WordShape::JoinWithBracket => words.join("["),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1645,6 +1648,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithBrace => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"{{\");\n}}\n"
         ),
+        WordShape::JoinWithBracket => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"[\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1675,7 +1681,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 90] = [
+    const SHAPES: [WordShape; 91] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1764,6 +1770,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithSpace,
         WordShape::JoinWithPipe,
         WordShape::JoinWithBrace,
+        WordShape::JoinWithBracket,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -4056,6 +4063,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-dc2_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // DC3 count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x13').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x13\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-dc3_count".to_string(),
                 error: None,
             });
         }
