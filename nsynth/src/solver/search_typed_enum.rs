@@ -444,6 +444,52 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             depth,
                         });
                     }
+                    // FILTER by absolute length thresholds (short / long words).
+                    for tag in ["gt1", "gt2", "eq1"] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                V::L(
+                                    l.iter()
+                                        .filter(|w| {
+                                            let n = w.chars().count();
+                                            match tag {
+                                                "gt1" => n > 1,
+                                                "gt2" => n > 2,
+                                                _ => n == 1,
+                                            }
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        let cond_mog = match tag {
+                            "gt1" => "w.len > 1",
+                            "gt2" => "w.len > 2",
+                            _ => "w.len == 1",
+                        };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn filterw_{tag}(ws: [string]) -> [string] {{\n\
+    out: [string] = [];\n\
+    for w in ws {{\n\
+        if {cond_mog} {{\n\
+            out.push(w);\n\
+        }}\n\
+    }}\n\
+    return out;\n\
+}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("filterw_{tag}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
                     // join with " " -> Str.
                     let outs: Vec<V> = e
                         .outs

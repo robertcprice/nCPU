@@ -1117,7 +1117,126 @@ fn try_dual_and_pairwise(
             });
         }
     }
+    for idx in [
+        IndexScan::SumEvenIndices,
+        IndexScan::SumOddIndices,
+        IndexScan::CountPeaks,
+    ] {
+        let ok = inputs
+            .iter()
+            .zip(expected.iter())
+            .all(|(arr, &y)| idx.eval(arr) == Some(y));
+        if !ok {
+            continue;
+        }
+        let code = idx.emit(fn_name);
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("utbus_index_{}", idx.label()),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
     None
+}
+
+/// Index-gated scans (native A5 parity slice).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexScan {
+    SumEvenIndices,
+    SumOddIndices,
+    /// Local peaks: `arr[i] > arr[i-1] && arr[i] > arr[i+1]` for interior i.
+    CountPeaks,
+}
+
+impl IndexScan {
+    fn label(self) -> &'static str {
+        match self {
+            IndexScan::SumEvenIndices => "sum_even_indices",
+            IndexScan::SumOddIndices => "sum_odd_indices",
+            IndexScan::CountPeaks => "count_peaks",
+        }
+    }
+
+    fn eval(self, arr: &[i64]) -> Option<i64> {
+        match self {
+            IndexScan::SumEvenIndices => {
+                Some(
+                    arr.iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % 2 == 0)
+                        .map(|(_, &v)| v)
+                        .fold(0i64, i64::saturating_add),
+                )
+            }
+            IndexScan::SumOddIndices => {
+                Some(
+                    arr.iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % 2 == 1)
+                        .map(|(_, &v)| v)
+                        .fold(0i64, i64::saturating_add),
+                )
+            }
+            IndexScan::CountPeaks => {
+                if arr.len() < 3 {
+                    return Some(0);
+                }
+                let mut count = 0i64;
+                for i in 1..arr.len() - 1 {
+                    if arr[i] > arr[i - 1] && arr[i] > arr[i + 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
+        }
+    }
+
+    fn emit(self, fn_name: &str) -> String {
+        match self {
+            IndexScan::SumEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::SumOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::CountPeaks => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i + 1 < arr.len {{\n\
+        if arr[i] > arr[i - 1] {{\n\
+            if arr[i] > arr[i + 1] {{\n\
+                count = count + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+        }
+    }
 }
 
 /// Public entry point. Returns `None` unless `NSYNTH_UTBUS=1`. When enabled,
@@ -1845,5 +1964,29 @@ mod tests {
             |arr| PairwiseScan::SumAbsDiff.eval(arr).unwrap_or(0),
         );
         assert_solves(&problem, "sum_abs_diff");
+    }
+
+    #[test]
+    fn utbus_solves_sum_even_indices() {
+        let problem = array_problem(
+            "sum_even_indices",
+            "fn sum_even_indices(arr: [i64]) -> i64",
+            &[&[1, 2, 3, 4], &[5], &[10, 20, 30], &[1, 1, 1, 1, 1]],
+            &[&[2, 4, 6, 8], &[7, 8]],
+            |arr| IndexScan::SumEvenIndices.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "sum_even_indices");
+    }
+
+    #[test]
+    fn utbus_solves_count_peaks() {
+        let problem = array_problem(
+            "count_peaks",
+            "fn count_peaks(arr: [i64]) -> i64",
+            &[&[1, 3, 2, 5, 1], &[1, 2, 3], &[5, 1, 5], &[1]],
+            &[&[2, 5, 2, 5, 2], &[9, 1, 9]],
+            |arr| IndexScan::CountPeaks.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "count_peaks");
     }
 }

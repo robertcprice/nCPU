@@ -195,6 +195,15 @@ fn pairwise_sum_abs_diff(arr: &[i64]) -> i64 {
     total
 }
 
+fn index_sum_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, &v)| v).sum()
+}
+
+fn index_count_peaks(arr: &[i64]) -> i64 {
+    if arr.len() < 3 { return 0; }
+    (1..arr.len() - 1).filter(|&i| arr[i] > arr[i - 1] && arr[i] > arr[i + 1]).count() as i64
+}
+
 fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut best = 1i64;
@@ -320,6 +329,8 @@ mod tests {
         assert_eq!(dual_prefix_max_sum(&[1, 3, 2, 5]), Some(12));
         assert_eq!(dual_max_subarray(&[1, -2, 3, 4, -1]), Some(7));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
+        assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
+        assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);
         assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 
