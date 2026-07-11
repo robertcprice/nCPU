@@ -267,6 +267,14 @@ fn dual_count_evens(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x % 2 == 0).count() as i64
 }
 
+fn dual_sum_positives(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x > 0).copied().sum()
+}
+
+fn dual_sum_negatives(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x < 0).copied().sum()
+}
+
 fn k_kth_from_end(arr: &[i64], k: i64) -> Option<i64> {
     if k < 1 || k as usize > arr.len() { return None; }
     Some(arr[arr.len() - (k as usize)])
@@ -583,6 +591,8 @@ mod tests {
         assert_eq!(dual_min_positive(&[-1, 0]), 0);
         assert_eq!(dual_count_negatives(&[-1, 2, -3, 0]), 2);
         assert_eq!(dual_count_evens(&[1, 2, 3, 4, 0]), 3);
+        assert_eq!(dual_sum_positives(&[-1, 2, 3, -4]), 5);
+        assert_eq!(dual_sum_negatives(&[-1, 2, 3, -4]), -5);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);

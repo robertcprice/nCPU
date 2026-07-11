@@ -741,6 +741,10 @@ enum DualAccum {
     CountNegatives,
     /// Count of even elements.
     CountEvens,
+    /// Sum of positive elements.
+    SumPositives,
+    /// Sum of negative elements.
+    SumNegatives,
 }
 
 impl DualAccum {
@@ -764,6 +768,8 @@ impl DualAccum {
             DualAccum::MinPositive => "min_positive",
             DualAccum::CountNegatives => "count_negatives",
             DualAccum::CountEvens => "count_evens",
+            DualAccum::SumPositives => "sum_positives",
+            DualAccum::SumNegatives => "sum_negatives",
         }
     }
 
@@ -937,6 +943,18 @@ impl DualAccum {
             DualAccum::CountEvens => {
                 Some(arr.iter().filter(|&&x| x % 2 == 0).count() as i64)
             }
+            DualAccum::SumPositives => Some(
+                arr.iter()
+                    .filter(|&&x| x > 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumNegatives => Some(
+                arr.iter()
+                    .filter(|&&x| x < 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -1181,6 +1199,24 @@ impl DualAccum {
         if item % 2 == 0 {{ count = count + 1; }}\n\
     }}\n\
     return count;\n\
+}}\n"
+            ),
+            DualAccum::SumPositives => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > 0 {{ total = total + item; }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumNegatives => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{ total = total + item; }}\n\
+    }}\n\
+    return total;\n\
 }}\n"
             ),
         }
@@ -1586,6 +1622,8 @@ fn try_dual_and_pairwise(
         DualAccum::MinPositive,
         DualAccum::CountNegatives,
         DualAccum::CountEvens,
+        DualAccum::SumPositives,
+        DualAccum::SumNegatives,
     ] {
         let ok = inputs
             .iter()
@@ -3086,5 +3124,7 @@ mod tests {
         assert_eq!(DualAccum::MinPositive.eval(&[-1, 0]), Some(0));
         assert_eq!(DualAccum::CountNegatives.eval(&[-1, 2, -3, 0]), Some(2));
         assert_eq!(DualAccum::CountEvens.eval(&[1, 2, 3, 4, 0]), Some(3));
+        assert_eq!(DualAccum::SumPositives.eval(&[-1, 2, 3, -4]), Some(5));
+        assert_eq!(DualAccum::SumNegatives.eval(&[-1, 2, 3, -4]), Some(-5));
     }
 }
