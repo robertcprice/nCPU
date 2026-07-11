@@ -62,11 +62,32 @@ def run_tests(repo, testcmd):
         return False, "TIMEOUT"
 
 
+def localize_target(repo, out):
+    """The buggy file to repair, inferred from the failure traceback: the DEEPEST (last) non-test
+    `.py` frame that lives inside the repo. This is what makes it repo-level (SWE-bench shape) — no
+    need to name the file; the failing test points at the code it exercised."""
+    cand = None
+    for f in re.findall(r'File "([^"]+\.py)"', out):
+        base = os.path.basename(f)
+        if base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py":
+            continue
+        rel = os.path.relpath(f, repo) if os.path.isabs(f) else f
+        if os.path.exists(os.path.join(repo, rel)) and not rel.startswith(".."):
+            cand = rel  # last frame wins (deepest in the call stack)
+    return cand
+
+
 def repair(repo, target, testcmd, iters=3):
-    """Returns (success, iterations_used, note). Reverts the file on failure."""
+    """Returns (success, iterations_used, note). Reverts the file on failure. `target` may be None or
+    "auto" to localize the buggy file from the baseline failure traceback."""
     ok, out = run_tests(repo, testcmd)
     if ok:
         return True, 0, "baseline already green"
+    if not target or target == "auto":
+        target = localize_target(repo, out)
+        if not target:
+            return False, 0, "could not localize a non-test file from the failure"
+        print(f"  [localized target: {target}]", file=sys.stderr)
     path = os.path.join(repo, target)
     orig = open(path).read()
     prior = orig
