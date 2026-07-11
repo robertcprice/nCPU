@@ -377,6 +377,36 @@ fn pairwise_non_increasing(arr: &[i64]) -> i64 {
     if (1..arr.len()).all(|i| arr[i] <= arr[i - 1]) { 1 } else { 0 }
 }
 
+fn pairwise_longest_inc_run(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best = 1i64;
+    let mut cur = 1i64;
+    for i in 1..arr.len() {
+        if arr[i] > arr[i - 1] {
+            cur += 1;
+            if cur > best { best = cur; }
+        } else {
+            cur = 1;
+        }
+    }
+    Some(best)
+}
+
+fn pairwise_longest_dec_run(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best = 1i64;
+    let mut cur = 1i64;
+    for i in 1..arr.len() {
+        if arr[i] < arr[i - 1] {
+            cur += 1;
+            if cur > best { best = cur; }
+        } else {
+            cur = 1;
+        }
+    }
+    Some(best)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +554,8 @@ mod tests {
         assert_eq!(pairwise_strictly_decreasing(&[5, 3, 1]), 1);
         assert_eq!(pairwise_non_increasing(&[5, 5, 3]), 1);
         assert_eq!(pairwise_non_increasing(&[5, 6, 3]), 0);
+        assert_eq!(pairwise_longest_inc_run(&[1, 2, 0, 3, 4, 5, 1]), Some(4));
+        assert_eq!(pairwise_longest_dec_run(&[5, 4, 3, 0, 2, 1]), Some(4));
     }
 }
 EOF

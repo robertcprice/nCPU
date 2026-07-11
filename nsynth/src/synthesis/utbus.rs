@@ -1073,6 +1073,10 @@ enum PairwiseScan {
     LongestPlateau,
     /// Sum of `|arr[i] - arr[i-1]|` over adjacent pairs.
     SumAbsDiff,
+    /// Length of the longest strictly-increasing contiguous run.
+    LongestIncreasingRun,
+    /// Length of the longest strictly-decreasing contiguous run.
+    LongestDecreasingRun,
 }
 
 impl PairwiseScan {
@@ -1088,13 +1092,17 @@ impl PairwiseScan {
             PairwiseScan::NonIncreasing => "non_increasing",
             PairwiseScan::LongestPlateau => "longest_plateau",
             PairwiseScan::SumAbsDiff => "sum_abs_diff",
+            PairwiseScan::LongestIncreasingRun => "longest_increasing_run",
+            PairwiseScan::LongestDecreasingRun => "longest_decreasing_run",
         }
     }
 
     fn eval(self, arr: &[i64]) -> Option<i64> {
         if arr.is_empty() {
             return match self {
-                PairwiseScan::LongestPlateau => None,
+                PairwiseScan::LongestPlateau
+                | PairwiseScan::LongestIncreasingRun
+                | PairwiseScan::LongestDecreasingRun => None,
                 PairwiseScan::StrictlyIncreasing
                 | PairwiseScan::StrictlyDecreasing
                 | PairwiseScan::NonDecreasing
@@ -1108,7 +1116,9 @@ impl PairwiseScan {
                 | PairwiseScan::StrictlyDecreasing
                 | PairwiseScan::NonDecreasing
                 | PairwiseScan::NonIncreasing => 1,
-                PairwiseScan::LongestPlateau => 1,
+                PairwiseScan::LongestPlateau
+                | PairwiseScan::LongestIncreasingRun
+                | PairwiseScan::LongestDecreasingRun => 1,
                 _ => 0,
             });
         }
@@ -1210,6 +1220,36 @@ impl PairwiseScan {
                     total = total.saturating_add(diff);
                 }
                 Some(total)
+            }
+            PairwiseScan::LongestIncreasingRun => {
+                let mut best = 1i64;
+                let mut cur = 1i64;
+                for i in 1..arr.len() {
+                    if arr[i] > arr[i - 1] {
+                        cur += 1;
+                        if cur > best {
+                            best = cur;
+                        }
+                    } else {
+                        cur = 1;
+                    }
+                }
+                Some(best)
+            }
+            PairwiseScan::LongestDecreasingRun => {
+                let mut best = 1i64;
+                let mut cur = 1i64;
+                for i in 1..arr.len() {
+                    if arr[i] < arr[i - 1] {
+                        cur += 1;
+                        if cur > best {
+                            best = cur;
+                        }
+                    } else {
+                        cur = 1;
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -1346,6 +1386,40 @@ impl PairwiseScan {
     return total;\n\
 }}\n"
             ),
+            PairwiseScan::LongestIncreasingRun => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 1;\n\
+    cur: i64 = 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] > arr[i - 1] {{\n\
+            cur = cur + 1;\n\
+            if cur > best {{ best = cur; }}\n\
+        }} else {{\n\
+            cur = 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            PairwiseScan::LongestDecreasingRun => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 1;\n\
+    cur: i64 = 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] < arr[i - 1] {{\n\
+            cur = cur + 1;\n\
+            if cur > best {{ best = cur; }}\n\
+        }} else {{\n\
+            cur = 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1398,6 +1472,8 @@ fn try_dual_and_pairwise(
         PairwiseScan::NonIncreasing,
         PairwiseScan::LongestPlateau,
         PairwiseScan::SumAbsDiff,
+        PairwiseScan::LongestIncreasingRun,
+        PairwiseScan::LongestDecreasingRun,
     ] {
         let ok = inputs
             .iter()
@@ -2768,6 +2844,14 @@ mod tests {
         assert_eq!(PairwiseScan::CountDecreases.eval(&[5, 3, 4, 1]), Some(2));
         assert_eq!(PairwiseScan::StrictlyDecreasing.eval(&[5, 3, 1]), Some(1));
         assert_eq!(PairwiseScan::NonIncreasing.eval(&[5, 5, 3]), Some(1));
+        assert_eq!(
+            PairwiseScan::LongestIncreasingRun.eval(&[1, 2, 0, 3, 4, 5, 1]),
+            Some(4)
+        );
+        assert_eq!(
+            PairwiseScan::LongestDecreasingRun.eval(&[5, 4, 3, 0, 2, 1]),
+            Some(4)
+        );
         assert_eq!(KClosed::KthSmallest.eval(&[3, 1, 4], 2), Some(3));
         assert_eq!(KClosed::KthLargest.eval(&[3, 1, 4], 1), Some(4));
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 5, 5], 5), Some(1));
