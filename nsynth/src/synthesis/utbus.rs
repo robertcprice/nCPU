@@ -753,6 +753,10 @@ enum DualAccum {
     IsEmpty,
     /// 1 if all elements are equal (empty → 1), else 0.
     AllEqual,
+    /// 1 if any element is positive, else 0.
+    AnyPositive,
+    /// 1 if any element is negative, else 0.
+    AnyNegative,
 }
 
 impl DualAccum {
@@ -782,6 +786,8 @@ impl DualAccum {
             DualAccum::Len => "len",
             DualAccum::IsEmpty => "is_empty",
             DualAccum::AllEqual => "all_equal",
+            DualAccum::AnyPositive => "any_positive",
+            DualAccum::AnyNegative => "any_negative",
         }
     }
 
@@ -982,6 +988,12 @@ impl DualAccum {
                 } else {
                     0
                 })
+            }
+            DualAccum::AnyPositive => {
+                Some(if arr.iter().any(|&x| x > 0) { 1 } else { 0 })
+            }
+            DualAccum::AnyNegative => {
+                Some(if arr.iter().any(|&x| x < 0) { 1 } else { 0 })
             }
         }
     }
@@ -1277,6 +1289,22 @@ impl DualAccum {
         i = i + 1;\n\
     }}\n\
     return 1;\n\
+}}\n"
+            ),
+            DualAccum::AnyPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item > 0 {{ return 1; }}\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::AnyNegative => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item < 0 {{ return 1; }}\n\
+    }}\n\
+    return 0;\n\
 }}\n"
             ),
         }
@@ -1713,6 +1741,8 @@ fn try_dual_and_pairwise(
         DualAccum::Len,
         DualAccum::IsEmpty,
         DualAccum::AllEqual,
+        DualAccum::AnyPositive,
+        DualAccum::AnyNegative,
     ] {
         let ok = inputs
             .iter()
