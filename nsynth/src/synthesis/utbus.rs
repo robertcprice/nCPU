@@ -635,6 +635,8 @@ enum DualAccum {
     Range,
     /// Second-largest element (teacher cascade; ties keep first).
     SecondMax,
+    /// One-buy one-sell max profit (0 if none).
+    StockProfit,
 }
 
 impl DualAccum {
@@ -642,6 +644,7 @@ impl DualAccum {
         match self {
             DualAccum::Range => "range",
             DualAccum::SecondMax => "second_max",
+            DualAccum::StockProfit => "stock_profit",
         }
     }
 
@@ -676,6 +679,20 @@ impl DualAccum {
                     }
                 }
                 Some(second)
+            }
+            DualAccum::StockProfit => {
+                let mut min_price = arr[0];
+                let mut best = 0i64;
+                for &p in arr {
+                    if p < min_price {
+                        min_price = p;
+                    }
+                    let profit = p.saturating_sub(min_price);
+                    if profit > best {
+                        best = profit;
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -714,6 +731,18 @@ impl DualAccum {
     return second;\n\
 }}\n"
             ),
+            DualAccum::StockProfit => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    min_price: i64 = arr[0];\n\
+    best: i64 = 0;\n\
+    for p in arr {{\n\
+        if p < min_price {{ min_price = p; }}\n\
+        profit: i64 = p - min_price;\n\
+        if profit > best {{ best = profit; }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -729,6 +758,10 @@ enum PairwiseScan {
     CountIncreases,
     /// 1 if strictly increasing for all adjacent pairs, else 0.
     StrictlyIncreasing,
+    /// 1 if non-decreasing (sorted ascending, ties ok), else 0.
+    NonDecreasing,
+    /// Length of the longest run of equal consecutive elements.
+    LongestPlateau,
 }
 
 impl PairwiseScan {
@@ -738,13 +771,23 @@ impl PairwiseScan {
             PairwiseScan::CountAdjacentDiff => "count_adjacent_diff",
             PairwiseScan::CountIncreases => "count_increases",
             PairwiseScan::StrictlyIncreasing => "strictly_increasing",
+            PairwiseScan::NonDecreasing => "non_decreasing",
+            PairwiseScan::LongestPlateau => "longest_plateau",
         }
     }
 
     fn eval(self, arr: &[i64]) -> Option<i64> {
+        if arr.is_empty() {
+            return match self {
+                PairwiseScan::LongestPlateau => None,
+                PairwiseScan::StrictlyIncreasing | PairwiseScan::NonDecreasing => Some(1),
+                _ => Some(0),
+            };
+        }
         if arr.len() < 2 {
             return Some(match self {
-                PairwiseScan::StrictlyIncreasing => 1,
+                PairwiseScan::StrictlyIncreasing | PairwiseScan::NonDecreasing => 1,
+                PairwiseScan::LongestPlateau => 1,
                 _ => 0,
             });
         }
@@ -787,6 +830,29 @@ impl PairwiseScan {
                     }
                 }
                 Some(1)
+            }
+            PairwiseScan::NonDecreasing => {
+                for i in 1..arr.len() {
+                    if arr[i] < arr[i - 1] {
+                        return Some(0);
+                    }
+                }
+                Some(1)
+            }
+            PairwiseScan::LongestPlateau => {
+                let mut best = 1i64;
+                let mut cur = 1i64;
+                for i in 1..arr.len() {
+                    if arr[i] == arr[i - 1] {
+                        cur += 1;
+                        if cur > best {
+                            best = cur;
+                        }
+                    } else {
+                        cur = 1;
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -844,6 +910,35 @@ impl PairwiseScan {
     return 1;\n\
 }}\n"
             ),
+            PairwiseScan::NonDecreasing => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] < arr[i - 1] {{\n\
+            return 0;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
+            PairwiseScan::LongestPlateau => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 1;\n\
+    cur: i64 = 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] == arr[i - 1] {{\n\
+            cur = cur + 1;\n\
+            if cur > best {{ best = cur; }}\n\
+        }} else {{\n\
+            cur = 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -854,7 +949,7 @@ fn try_dual_and_pairwise(
     inputs: &[Vec<i64>],
     expected: &[i64],
 ) -> Option<SolveResult> {
-    for dual in [DualAccum::Range, DualAccum::SecondMax] {
+    for dual in [DualAccum::Range, DualAccum::SecondMax, DualAccum::StockProfit] {
         let ok = inputs
             .iter()
             .zip(expected.iter())
@@ -878,6 +973,8 @@ fn try_dual_and_pairwise(
         PairwiseScan::CountAdjacentDiff,
         PairwiseScan::CountIncreases,
         PairwiseScan::StrictlyIncreasing,
+        PairwiseScan::NonDecreasing,
+        PairwiseScan::LongestPlateau,
     ] {
         let ok = inputs
             .iter()
@@ -1541,5 +1638,41 @@ mod tests {
             |arr| PairwiseScan::StrictlyIncreasing.eval(arr).unwrap_or(0),
         );
         assert_solves(&problem, "strictly_increasing");
+    }
+
+    #[test]
+    fn utbus_solves_stock_profit() {
+        let problem = array_problem(
+            "max_stock_profit",
+            "fn max_stock_profit(arr: [i64]) -> i64",
+            &[&[7, 1, 5, 3, 6, 4], &[7, 6, 4, 3, 1], &[1, 2], &[2, 4, 1, 7]],
+            &[&[3, 3, 3], &[1, 5, 2, 8]],
+            |arr| DualAccum::StockProfit.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "stock_profit");
+    }
+
+    #[test]
+    fn utbus_solves_longest_plateau() {
+        let problem = array_problem(
+            "longest_plateau",
+            "fn longest_plateau(arr: [i64]) -> i64",
+            &[&[1, 1, 2, 2, 2, 1], &[5, 5, 5, 5], &[1, 2, 3], &[3, 3, 1, 1, 1, 2]],
+            &[&[7, 7, 3, 3], &[1]],
+            |arr| PairwiseScan::LongestPlateau.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "longest_plateau");
+    }
+
+    #[test]
+    fn utbus_solves_is_sorted_nondecreasing() {
+        let problem = array_problem(
+            "is_sorted",
+            "fn is_sorted(arr: [i64]) -> i64",
+            &[&[1, 2, 3], &[1, 2, 2], &[3, 1], &[5], &[4, 4, 4]],
+            &[&[0, 1, 1], &[2, 1]],
+            |arr| PairwiseScan::NonDecreasing.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "non_decreasing");
     }
 }

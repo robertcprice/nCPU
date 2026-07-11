@@ -150,6 +150,33 @@ fn dual_second_max(arr: &[i64]) -> Option<i64> {
     Some(second)
 }
 
+fn dual_stock_profit(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut min_price = arr[0];
+    let mut best = 0i64;
+    for &p in arr {
+        if p < min_price { min_price = p; }
+        let profit = p - min_price;
+        if profit > best { best = profit; }
+    }
+    Some(best)
+}
+
+fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best = 1i64;
+    let mut cur = 1i64;
+    for i in 1..arr.len() {
+        if arr[i] == arr[i - 1] {
+            cur += 1;
+            if cur > best { best = cur; }
+        } else {
+            cur = 1;
+        }
+    }
+    Some(best)
+}
+
 fn pairwise_max_abs_diff(arr: &[i64]) -> i64 {
     if arr.len() < 2 { return 0; }
     let mut best = 0i64;
@@ -255,6 +282,9 @@ mod tests {
         assert_eq!(dual_second_max(&[3, 1, 4, 1, 5]), Some(4));
         assert_eq!(dual_second_max(&[2, 8, 3]), Some(3));
         assert_eq!(dual_second_max(&[5, 10, 8]), Some(8));
+        assert_eq!(dual_stock_profit(&[7, 1, 5, 3, 6, 4]), Some(5));
+        assert_eq!(dual_stock_profit(&[7, 6, 4, 3, 1]), Some(0));
+        assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 
     #[test]
