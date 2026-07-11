@@ -907,6 +907,7 @@ enum WordShape {
     JoinWithDotSlash,
     JoinWithCommaSlash,
     JoinWithSemiSlash,
+    JoinWithColonBang,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -1061,6 +1062,7 @@ impl WordShape {
             WordShape::JoinWithDotSlash => "join_with_dot_slash",
             WordShape::JoinWithCommaSlash => "join_with_comma_slash",
             WordShape::JoinWithSemiSlash => "join_with_semi_slash",
+            WordShape::JoinWithColonBang => "join_with_colon_bang",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1533,6 +1535,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithDotSlash => words.join("./"),
         WordShape::JoinWithCommaSlash => words.join(",/"),
         WordShape::JoinWithSemiSlash => words.join(";/"),
+        WordShape::JoinWithColonBang => words.join(":!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1987,6 +1990,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithSemiSlash => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\";/\");\n}}\n"
         ),
+        WordShape::JoinWithColonBang => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\":!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -2017,7 +2023,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 147] = [
+    const SHAPES: [WordShape; 148] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -2163,6 +2169,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithDotSlash,
         WordShape::JoinWithCommaSlash,
         WordShape::JoinWithSemiSlash,
+        WordShape::JoinWithColonBang,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2567,6 +2574,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Letter 'x'/'X' count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.eq_ignore_ascii_case(&'x')).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c == \"x\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-x_count".to_string(),
                 error: None,
             });
         }
