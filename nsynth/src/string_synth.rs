@@ -696,6 +696,8 @@ enum WordShape {
     LongestWord,
     /// The single shortest word (first on a length tie).
     ShortestWord,
+    /// The middle word `words[len/2]` (empty → "").
+    MiddleWord,
     /// First character of each word, concatenated (initials): "hi there" -> "ht".
     Initials,
     /// Keep words whose char-count is even (order-preserving filter).
@@ -778,6 +780,7 @@ impl WordShape {
             WordShape::ReverseWordOrder => "reverse_word_order",
             WordShape::LongestWord => "longest_word",
             WordShape::ShortestWord => "shortest_word",
+            WordShape::MiddleWord => "middle_word",
             WordShape::Initials => "initials",
             WordShape::FilterEvenLen => "filter_even_len",
             WordShape::FilterOddLen => "filter_odd_len",
@@ -875,6 +878,13 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 }
             }
             best.to_string()
+        }
+        WordShape::MiddleWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                words[words.len() / 2].to_string()
+            }
         }
         // First char of each word, joined with "" (empty word contributes "").
         WordShape::Initials => words
@@ -1124,6 +1134,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ShortestWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    best: string = words[0];\n    i: i64 = 1;\n    while i < words.len {{\n        if words[i].len < best.len {{\n            best = words[i];\n        }}\n        i = i + 1;\n    }}\n    return best;\n}}\n"
         ),
+        WordShape::MiddleWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    return words[words.len / 2];\n}}\n"
+        ),
         WordShape::Initials => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].slice(0, 1));\n        i = i + 1;\n    }}\n    return out.join(\"\");\n}}\n"
         ),
@@ -1253,7 +1266,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 42] = [
+    const SHAPES: [WordShape; 43] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1261,6 +1274,7 @@ pub fn synthesize_word_program(
         WordShape::ReverseWordOrder,
         WordShape::LongestWord,
         WordShape::ShortestWord,
+        WordShape::MiddleWord,
         WordShape::Initials,
         WordShape::FilterEvenLen,
         WordShape::FilterOddLen,
@@ -2242,6 +2256,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-non_alnum_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Underscore count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '_').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"_\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-underscore_count".to_string(),
                 error: None,
             });
         }

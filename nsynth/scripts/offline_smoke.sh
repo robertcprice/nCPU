@@ -521,6 +521,18 @@ fn dual_min_odd_value(arr: &[i64]) -> i64 {
     best
 }
 
+fn dual_abs_range(arr: &[i64]) -> i64 {
+    if arr.is_empty() { return 0; }
+    let mut lo = arr[0].abs();
+    let mut hi = lo;
+    for &x in arr.iter().skip(1) {
+        let a = x.abs();
+        if a < lo { lo = a; }
+        if a > hi { hi = a; }
+    }
+    hi - lo
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -1035,6 +1047,14 @@ fn index_mean_odd_trunc(arr: &[i64]) -> i64 {
     if vals.is_empty() { 0 } else { vals.iter().sum::<i64>() / (vals.len() as i64) }
 }
 
+fn index_count_positive_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==0 && v > 0).count() as i64
+}
+
+fn index_count_positive_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v > 0).count() as i64
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1169,6 +1189,10 @@ fn k_count_abs_lt(arr: &[i64], k: i64) -> i64 {
 
 fn k_sum_abs_ge(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v >= k).map(|&v| v.abs()).sum()
+}
+
+fn k_sum_abs_le(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v <= k).map(|&v| v.abs()).sum()
 }
 
 #[cfg(test)]
@@ -1347,6 +1371,7 @@ mod tests {
         assert_eq!(dual_max_odd_value(&[1, 8, 3, 4]), 3);
         assert_eq!(dual_min_even_value(&[1, 8, 3, 4]), 4);
         assert_eq!(dual_min_odd_value(&[1, 8, 3, 4]), 1);
+        assert_eq!(dual_abs_range(&[-5, 2, -1]), 4);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1387,6 +1412,7 @@ mod tests {
         assert_eq!(k_count_abs_gt(&[-5, 2, 4], 2), 2);
         assert_eq!(k_count_abs_lt(&[-5, 2, 4], 3), 1);
         assert_eq!(k_sum_abs_ge(&[-5, 2, 4], 2), 6);
+        assert_eq!(k_sum_abs_le(&[-5, 2, 4], 2), 7);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1397,6 +1423,8 @@ mod tests {
         assert_eq!(index_sum_squares_odd(&[2, 9, 3, 8]), 145);
         assert_eq!(index_mean_even_trunc(&[2, 9, 4, 8]), 3);
         assert_eq!(index_mean_odd_trunc(&[2, 9, 4, 8]), 8);
+        assert_eq!(index_count_positive_even(&[-1, 2, 3, -4]), 1);
+        assert_eq!(index_count_positive_odd(&[-1, 2, 3, -4]), 1);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1500,6 +1528,11 @@ fn first_word(s: &str, sep: &str) -> String {
 
 fn last_word(s: &str, sep: &str) -> String {
     s.split(sep).last().unwrap_or("").to_string()
+}
+
+fn middle_word(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.is_empty() { String::new() } else { words[words.len()/2].to_string() }
 }
 
 fn duplicate_each(s: &str, sep: &str) -> String {
@@ -1713,6 +1746,10 @@ fn non_alnum_count(s: &str) -> i64 {
     s.chars().filter(|c| !c.is_ascii_alphanumeric()).count() as i64
 }
 
+fn underscore_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '_').count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1738,6 +1775,7 @@ mod tests {
         assert_eq!(drop_first("keep the rest", " "), "the rest");
         assert_eq!(first_word("alpha beta gamma", " "), "alpha");
         assert_eq!(last_word("alpha beta gamma", " "), "gamma");
+        assert_eq!(middle_word("alpha beta gamma", " "), "beta");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
@@ -1778,6 +1816,7 @@ mod tests {
         assert_eq!(whitespace_count("a b\tc\n"), 3);
         assert_eq!(alnum_count("Hi 2!"), 3);
         assert_eq!(non_alnum_count("Hi 2!"), 2);
+        assert_eq!(underscore_count("a_b__c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
