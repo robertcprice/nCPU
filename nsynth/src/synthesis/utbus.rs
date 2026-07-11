@@ -747,6 +747,8 @@ enum DualAccum {
     SumNegatives,
     /// Count of odd elements.
     CountOdds,
+    /// Length of the array.
+    Len,
 }
 
 impl DualAccum {
@@ -773,6 +775,7 @@ impl DualAccum {
             DualAccum::SumPositives => "sum_positives",
             DualAccum::SumNegatives => "sum_negatives",
             DualAccum::CountOdds => "count_odds",
+            DualAccum::Len => "len",
         }
     }
 
@@ -961,6 +964,7 @@ impl DualAccum {
             DualAccum::CountOdds => {
                 Some(arr.iter().filter(|&&x| x % 2 != 0).count() as i64)
             }
+            DualAccum::Len => Some(arr.len() as i64),
         }
     }
 
@@ -1232,6 +1236,11 @@ impl DualAccum {
         if item % 2 != 0 {{ count = count + 1; }}\n\
     }}\n\
     return count;\n\
+}}\n"
+            ),
+            DualAccum::Len => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr.len;\n\
 }}\n"
             ),
         }
@@ -1640,6 +1649,7 @@ fn try_dual_and_pairwise(
         DualAccum::SumPositives,
         DualAccum::SumNegatives,
         DualAccum::CountOdds,
+        DualAccum::Len,
     ] {
         let ok = inputs
             .iter()
