@@ -239,6 +239,10 @@ fn dual_sum_squares(arr: &[i64]) -> i64 {
     arr.iter().map(|&x| x.saturating_mul(x)).fold(0i64, i64::saturating_add)
 }
 
+fn dual_abs_sum(arr: &[i64]) -> i64 {
+    arr.iter().map(|&x| x.abs()).fold(0i64, i64::saturating_add)
+}
+
 fn k_kth_from_end(arr: &[i64], k: i64) -> Option<i64> {
     if k < 1 || k as usize > arr.len() { return None; }
     Some(arr[arr.len() - (k as usize)])
@@ -549,6 +553,7 @@ mod tests {
         assert_eq!(dual_mean_trunc(&[1, 2, 3]), Some(2));
         assert_eq!(dual_mean_trunc(&[10, 20, 30, 40]), Some(25));
         assert_eq!(dual_sum_squares(&[1, 2, 3]), 14);
+        assert_eq!(dual_abs_sum(&[-1, 2, -3]), 6);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);

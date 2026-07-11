@@ -731,6 +731,8 @@ enum DualAccum {
     MeanTrunc,
     /// Sum of squares.
     SumSquares,
+    /// Sum of absolute values.
+    AbsSum,
 }
 
 impl DualAccum {
@@ -749,6 +751,7 @@ impl DualAccum {
             DualAccum::LcmAll => "lcm_all",
             DualAccum::MeanTrunc => "mean_trunc",
             DualAccum::SumSquares => "sum_squares",
+            DualAccum::AbsSum => "abs_sum",
         }
     }
 
@@ -893,6 +896,12 @@ impl DualAccum {
                 arr.iter()
                     .copied()
                     .map(|x| x.saturating_mul(x))
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::AbsSum => Some(
+                arr.iter()
+                    .copied()
+                    .map(|x| x.abs())
                     .fold(0i64, i64::saturating_add),
             ),
         }
@@ -1076,6 +1085,17 @@ impl DualAccum {
     total: i64 = 0;\n\
     for item in arr {{\n\
         total = total + item * item;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::AbsSum => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        v: i64 = item;\n\
+        if v < 0 {{ v = 0 - v; }}\n\
+        total = total + v;\n\
     }}\n\
     return total;\n\
 }}\n"
@@ -1478,6 +1498,7 @@ fn try_dual_and_pairwise(
         DualAccum::LcmAll,
         DualAccum::MeanTrunc,
         DualAccum::SumSquares,
+        DualAccum::AbsSum,
     ] {
         let ok = inputs
             .iter()
@@ -2970,5 +2991,7 @@ mod tests {
         assert_eq!(DualAccum::MeanTrunc.eval(&[10, 20, 30, 40]), Some(25));
         assert_eq!(DualAccum::SumSquares.eval(&[1, 2, 3]), Some(14));
         assert_eq!(DualAccum::SumSquares.eval(&[-2, 3]), Some(13));
+        assert_eq!(DualAccum::AbsSum.eval(&[-1, 2, -3]), Some(6));
+        assert_eq!(DualAccum::AbsSum.eval(&[5, 0, -2]), Some(7));
     }
 }
