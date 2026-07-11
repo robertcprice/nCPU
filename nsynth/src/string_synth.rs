@@ -857,6 +857,7 @@ enum WordShape {
     JoinWithCloseParen,
     JoinWithEllipsis,
     JoinWithArrow,
+    JoinWithDoubleColon,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -961,6 +962,7 @@ impl WordShape {
             WordShape::JoinWithCloseParen => "join_with_close_paren",
             WordShape::JoinWithEllipsis => "join_with_ellipsis",
             WordShape::JoinWithArrow => "join_with_arrow",
+            WordShape::JoinWithDoubleColon => "join_with_double_colon",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1383,6 +1385,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithCloseParen => words.join(")"),
         WordShape::JoinWithEllipsis => words.join("..."),
         WordShape::JoinWithArrow => words.join("->"),
+        WordShape::JoinWithDoubleColon => words.join("::"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1687,6 +1690,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithArrow => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"->\");\n}}\n"
         ),
+        WordShape::JoinWithDoubleColon => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"::\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1717,7 +1723,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 97] = [
+    const SHAPES: [WordShape; 98] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1813,6 +1819,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithCloseParen,
         WordShape::JoinWithEllipsis,
         WordShape::JoinWithArrow,
+        WordShape::JoinWithDoubleColon,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -4301,6 +4308,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-em_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // SUB count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x1a').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x1a\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-sub_count".to_string(),
                 error: None,
             });
         }
