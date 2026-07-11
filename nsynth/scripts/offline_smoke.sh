@@ -69,7 +69,7 @@ cat > "$TMP/utbus_reduce/src/lib.rs" <<'EOF'
 //! so Phase A expand stays checkable without linguigenesis-core.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reduce { Sum, Max, Min, Count, Product }
+enum Reduce { Sum, Max, Min, Count, Product, Xor }
 
 impl Reduce {
     fn apply(self, arr: &[i64]) -> i64 {
@@ -79,6 +79,7 @@ impl Reduce {
             Reduce::Min => arr.iter().copied().min().unwrap_or(0),
             Reduce::Count => arr.len() as i64,
             Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
+            Reduce::Xor => arr.iter().copied().fold(0i64, |a, b| a ^ b),
         }
     }
 }
@@ -107,6 +108,7 @@ fn synthesize(examples: &[(Vec<i64>, i64)]) -> Option<(Pred, Reduce)> {
         (Pred::All, Reduce::Max),
         (Pred::All, Reduce::Min),
         (Pred::All, Reduce::Product),
+        (Pred::All, Reduce::Xor),
         (Pred::Positive, Reduce::Count),
         (Pred::Positive, Reduce::Sum),
     ];
@@ -193,6 +195,13 @@ fn dual_min_subarray(arr: &[i64]) -> Option<i64> {
         if current < best { best = current; }
     }
     Some(best)
+}
+
+fn dual_median(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut s = arr.to_vec();
+    s.sort_unstable();
+    Some(s[s.len() / 2])
 }
 
 fn dual_second_min(arr: &[i64]) -> Option<i64> {
@@ -379,12 +388,24 @@ mod tests {
     }
 
     #[test]
-    fn xor_fold_not_in_dsl() {
-        // Bitwise xor-reduce is outside the Reduce enum.
+    fn array_xor_fold() {
         let ex = vec![
             (vec![1, 2, 3], 0),
             (vec![7, 1], 6),
             (vec![4, 4, 1], 1),
+        ];
+        let (_, reduce) = synthesize(&ex).expect("xor");
+        assert!(matches!(reduce, Reduce::Xor));
+    }
+
+    #[test]
+    fn median_not_in_dsl() {
+        // Median is outside the Reduce enum (needs sort + index).
+        // Cases where median ≠ max/min/sum/xor/product/count.
+        let ex = vec![
+            (vec![1, 100, 2], 2),
+            (vec![10, 1, 5], 5),
+            (vec![0, 8, 4], 4),
         ];
         assert!(synthesize(&ex).is_none());
     }
@@ -413,6 +434,8 @@ mod tests {
         assert_eq!(dual_prefix_max_sum(&[1, 3, 2, 5]), Some(12));
         assert_eq!(dual_max_subarray(&[1, -2, 3, 4, -1]), Some(7));
         assert_eq!(dual_min_subarray(&[1, -2, 3, -4]), Some(-4));
+        assert_eq!(dual_median(&[1, 100, 2]), Some(2));
+        assert_eq!(dual_median(&[10, 1, 5, 0]), Some(5));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);

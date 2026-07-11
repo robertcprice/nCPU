@@ -287,6 +287,8 @@ enum Reduce {
     Count,
     /// Product of elements (empty → 1).
     Product,
+    /// Bitwise XOR fold (empty → 0).
+    Xor,
 }
 
 impl Reduce {
@@ -297,6 +299,7 @@ impl Reduce {
             Reduce::Min => "min",
             Reduce::Count => "count",
             Reduce::Product => "product",
+            Reduce::Xor => "xor",
         }
     }
 
@@ -307,6 +310,7 @@ impl Reduce {
             Reduce::Min => arr.iter().copied().min().unwrap_or(0),
             Reduce::Count => arr.len() as i64,
             Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
+            Reduce::Xor => arr.iter().copied().fold(0i64, |a, b| a ^ b),
         }
     }
 }
@@ -386,6 +390,7 @@ impl ArrayProgram {
             Reduce::Count => 1,
             Reduce::Max | Reduce::Min => 1,
             Reduce::Product => 1,
+            Reduce::Xor => 1,
         };
         pred_cost + map_cost + order_cost + prefix_cost + reduce_cost
     }
@@ -528,6 +533,13 @@ impl ArrayProgram {
                 body.push_str("    }\n");
                 body.push_str("    return total;\n");
             }
+            Reduce::Xor => {
+                body.push_str("    total: i64 = 0;\n");
+                body.push_str("    for item in a {\n");
+                body.push_str("        total = total ^ item;\n");
+                body.push_str("    }\n");
+                body.push_str("    return total;\n");
+            }
         }
         body.push_str("}\n");
         body
@@ -580,6 +592,7 @@ fn enumerate_array_programs(include_k_preds: bool) -> Vec<ArrayProgram> {
         Reduce::Max,
         Reduce::Min,
         Reduce::Product,
+        Reduce::Xor,
     ];
 
     let mut programs = Vec::new();
@@ -652,6 +665,8 @@ enum DualAccum {
     MaxSubarraySum,
     /// Minimum contiguous subarray sum (Kadane dual).
     MinSubarraySum,
+    /// Sort ascending, return `sorted[len/2]` (upper-middle for even length).
+    Median,
 }
 
 impl DualAccum {
@@ -665,6 +680,7 @@ impl DualAccum {
             DualAccum::PrefixMinSum => "prefix_min_sum",
             DualAccum::MaxSubarraySum => "max_subarray_sum",
             DualAccum::MinSubarraySum => "min_subarray_sum",
+            DualAccum::Median => "median",
         }
     }
 
@@ -778,6 +794,11 @@ impl DualAccum {
                     }
                 }
                 Some(best)
+            }
+            DualAccum::Median => {
+                let mut sorted = arr.to_vec();
+                sorted.sort_unstable();
+                Some(sorted[sorted.len() / 2])
             }
         }
     }
@@ -895,6 +916,12 @@ impl DualAccum {
         if current < best {{ best = current; }}\n\
     }}\n\
     return best;\n\
+}}\n"
+            ),
+            DualAccum::Median => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    arr.sort();\n\
+    return arr[arr.len / 2];\n\
 }}\n"
             ),
         }
@@ -1216,6 +1243,7 @@ fn try_dual_and_pairwise(
         DualAccum::PrefixMinSum,
         DualAccum::MaxSubarraySum,
         DualAccum::MinSubarraySum,
+        DualAccum::Median,
     ] {
         let ok = inputs
             .iter()
@@ -2128,6 +2156,7 @@ mod tests {
         assert!(programs.iter().any(|p| p.reduce == Reduce::Min));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Count));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Product));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Xor));
         assert!(programs.iter().all(|p| !p.pred.uses_k()));
         let with_k = enumerate_array_programs(true);
         assert!(with_k.iter().any(|p| p.pred == ElemPred::GtK));
@@ -2156,6 +2185,18 @@ mod tests {
             |arr| arr.iter().copied().fold(1i64, i64::saturating_mul),
         );
         assert_solves(&problem, "product");
+    }
+
+    #[test]
+    fn utbus_solves_array_xor() {
+        let problem = array_problem(
+            "array_xor",
+            "fn array_xor(arr: [i64]) -> i64",
+            &[&[1, 2, 3], &[7, 1], &[4, 4, 1], &[0]],
+            &[&[8, 1, 9], &[5, 5, 5]],
+            |arr| arr.iter().copied().fold(0i64, |a, b| a ^ b),
+        );
+        assert_solves(&problem, "xor");
     }
 
     /// Array + scalar-k problem helper for threshold predicates.
@@ -2522,6 +2563,18 @@ mod tests {
     }
 
     #[test]
+    fn utbus_solves_median() {
+        let problem = array_problem(
+            "median",
+            "fn median(arr: [i64]) -> i64",
+            &[&[1, 100, 2], &[10, 1, 5], &[0, 8, 4], &[7]],
+            &[&[3, 1, 2], &[9, 0, 5, 1]],
+            |arr| DualAccum::Median.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "median");
+    }
+
+    #[test]
     fn index_scan_eval_helpers() {
         assert_eq!(IndexScan::SumEvenIndices.eval(&[1, 2, 3, 4]), Some(4));
         assert_eq!(IndexScan::SumOddIndices.eval(&[1, 2, 3, 4]), Some(6));
@@ -2542,5 +2595,7 @@ mod tests {
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 5, 5], 5), Some(1));
         assert_eq!(KClosed::LastIndexOf.eval(&[1, 5, 5], 5), Some(2));
         assert_eq!(KClosed::FirstIndexOf.eval(&[1, 2], 9), Some(-1));
+        assert_eq!(DualAccum::Median.eval(&[1, 100, 2]), Some(2));
+        assert_eq!(DualAccum::Median.eval(&[10, 1, 5, 0]), Some(5));
     }
 }
