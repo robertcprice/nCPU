@@ -342,6 +342,11 @@ fn dual_product_positives(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x > 0).copied().fold(1, i64::saturating_mul)
 }
 
+fn dual_mean_abs_trunc(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    Some(arr.iter().map(|&x| x.abs()).sum::<i64>() / (arr.len() as i64))
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -591,6 +596,26 @@ fn pairwise_longest_noninc_run(arr: &[i64]) -> Option<i64> {
     Some(best)
 }
 
+fn pairwise_sum_increases(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut total = 0i64;
+    for i in 1..arr.len() {
+        let rise = arr[i] - arr[i - 1];
+        if rise > 0 { total += rise; }
+    }
+    total
+}
+
+fn pairwise_sum_decreases(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut total = 0i64;
+    for i in 1..arr.len() {
+        let fall = arr[i - 1] - arr[i];
+        if fall > 0 { total += fall; }
+    }
+    total
+}
+
 fn index_middle(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     Some(arr[arr.len() / 2])
@@ -632,6 +657,14 @@ fn k_count_eq(arr: &[i64], k: i64) -> i64 {
 
 fn k_sum_gt(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v > k).copied().sum()
+}
+
+fn k_count_gt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v > k).count() as i64
+}
+
+fn k_sum_lt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v < k).copied().sum()
 }
 
 #[cfg(test)]
@@ -780,6 +813,7 @@ mod tests {
         assert_eq!(dual_count_non_zeros(&[0, 1, 0, 2]), 2);
         assert_eq!(dual_alternating_sum(&[10, 3, 2, 1]), 8);
         assert_eq!(dual_product_positives(&[-1, 2, 3, 0]), 6);
+        assert_eq!(dual_mean_abs_trunc(&[-2, 4, -6]), Some(4));
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -791,6 +825,8 @@ mod tests {
         assert_eq!(index_min_odd(&[1, 9, 3, 2]), Some(2));
         assert_eq!(k_count_eq(&[1, 5, 5, 2], 5), 2);
         assert_eq!(k_sum_gt(&[1, 5, 3, 2], 2), 8);
+        assert_eq!(k_count_gt(&[1, 5, 3, 2], 2), 2);
+        assert_eq!(k_sum_lt(&[1, 5, 3, 2], 3), 3);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -825,6 +861,8 @@ mod tests {
         assert_eq!(pairwise_max_decrease(&[9, 2, 8, 1]), 7);
         assert_eq!(pairwise_longest_nondec_run(&[1, 2, 2, 0, 3, 4]), Some(3));
         assert_eq!(pairwise_longest_noninc_run(&[5, 4, 4, 1, 9, 8]), Some(4));
+        assert_eq!(pairwise_sum_increases(&[1, 5, 2, 9]), 11);
+        assert_eq!(pairwise_sum_decreases(&[9, 2, 8, 1]), 14);
     }
 }
 EOF

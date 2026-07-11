@@ -781,6 +781,8 @@ enum DualAccum {
     AlternatingSum,
     /// Product of positive elements (none → 1).
     ProductPositives,
+    /// Truncating mean of absolute values: `abs_sum / len`.
+    MeanAbsTrunc,
 }
 
 impl DualAccum {
@@ -824,6 +826,7 @@ impl DualAccum {
             DualAccum::CountNonZeros => "count_non_zeros",
             DualAccum::AlternatingSum => "alternating_sum",
             DualAccum::ProductPositives => "product_positives",
+            DualAccum::MeanAbsTrunc => "mean_abs_trunc",
         }
     }
 
@@ -857,6 +860,7 @@ impl DualAccum {
                 | DualAccum::SumOddValues
                 | DualAccum::AlternatingSum => Some(0),
                 DualAccum::ProductPositives => Some(1),
+                DualAccum::MeanAbsTrunc | DualAccum::MeanTrunc => None,
                 _ => None,
             };
         }
@@ -1135,6 +1139,14 @@ impl DualAccum {
                     .copied()
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanAbsTrunc => {
+                let sum = arr
+                    .iter()
+                    .copied()
+                    .map(|x| x.abs())
+                    .fold(0i64, i64::saturating_add);
+                Some(sum / (arr.len() as i64))
+            }
         }
     }
 
@@ -1584,6 +1596,19 @@ impl DualAccum {
     return total;\n\
 }}\n"
             ),
+            DualAccum::MeanAbsTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{\n\
+            total = total - item;\n\
+        }} else {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total / arr.len;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1625,6 +1650,10 @@ enum PairwiseScan {
     LongestNonDecreasingRun,
     /// Length of the longest non-increasing contiguous run.
     LongestNonIncreasingRun,
+    /// Sum of positive adjacent rises (ignore non-positive deltas).
+    SumIncreases,
+    /// Sum of positive adjacent falls (ignore non-positive deltas).
+    SumDecreases,
 }
 
 impl PairwiseScan {
@@ -1647,6 +1676,8 @@ impl PairwiseScan {
             PairwiseScan::MaxDecrease => "max_decrease",
             PairwiseScan::LongestNonDecreasingRun => "longest_non_decreasing_run",
             PairwiseScan::LongestNonIncreasingRun => "longest_non_increasing_run",
+            PairwiseScan::SumIncreases => "sum_increases",
+            PairwiseScan::SumDecreases => "sum_decreases",
         }
     }
 
@@ -1866,6 +1897,26 @@ impl PairwiseScan {
                     }
                 }
                 Some(best)
+            }
+            PairwiseScan::SumIncreases => {
+                let mut total = 0i64;
+                for i in 1..arr.len() {
+                    let rise = arr[i].saturating_sub(arr[i - 1]);
+                    if rise > 0 {
+                        total = total.saturating_add(rise);
+                    }
+                }
+                Some(total)
+            }
+            PairwiseScan::SumDecreases => {
+                let mut total = 0i64;
+                for i in 1..arr.len() {
+                    let fall = arr[i - 1].saturating_sub(arr[i]);
+                    if fall > 0 {
+                        total = total.saturating_add(fall);
+                    }
+                }
+                Some(total)
             }
         }
     }
@@ -2107,6 +2158,30 @@ impl PairwiseScan {
     return best;\n\
 }}\n"
             ),
+            PairwiseScan::SumIncreases => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        rise: i64 = arr[i] - arr[i - 1];\n\
+        if rise > 0 {{ total = total + rise; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            PairwiseScan::SumDecreases => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        fall: i64 = arr[i - 1] - arr[i];\n\
+        if fall > 0 {{ total = total + fall; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2156,6 +2231,7 @@ fn try_dual_and_pairwise(
         DualAccum::CountNonZeros,
         DualAccum::AlternatingSum,
         DualAccum::ProductPositives,
+        DualAccum::MeanAbsTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -2193,6 +2269,8 @@ fn try_dual_and_pairwise(
         PairwiseScan::MaxDecrease,
         PairwiseScan::LongestNonDecreasingRun,
         PairwiseScan::LongestNonIncreasingRun,
+        PairwiseScan::SumIncreases,
+        PairwiseScan::SumDecreases,
     ] {
         let ok = inputs
             .iter()
@@ -2754,6 +2832,10 @@ enum KClosed {
     CountEqK,
     /// Sum of elements greater than `k`.
     SumGtK,
+    /// Count of elements greater than `k`.
+    CountGtK,
+    /// Sum of elements less than `k`.
+    SumLtK,
 }
 
 impl KClosed {
@@ -2767,6 +2849,8 @@ impl KClosed {
             KClosed::ElementAt => "element_at",
             KClosed::CountEqK => "count_eq_k",
             KClosed::SumGtK => "sum_gt_k",
+            KClosed::CountGtK => "count_gt_k",
+            KClosed::SumLtK => "sum_lt_k",
         }
     }
 
@@ -2820,6 +2904,13 @@ impl KClosed {
             KClosed::SumGtK => Some(
                 arr.iter()
                     .filter(|&&v| v > k)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
+            KClosed::CountGtK => Some(arr.iter().filter(|&&v| v > k).count() as i64),
+            KClosed::SumLtK => Some(
+                arr.iter()
+                    .filter(|&&v| v < k)
                     .copied()
                     .fold(0i64, i64::saturating_add),
             ),
@@ -2896,6 +2987,28 @@ impl KClosed {
     return total;\n\
 }}\n"
             ),
+            KClosed::CountGtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item > k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            KClosed::SumLtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < k {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2916,6 +3029,8 @@ fn try_k_closed(
         KClosed::ElementAt,
         KClosed::CountEqK,
         KClosed::SumGtK,
+        KClosed::CountGtK,
+        KClosed::SumLtK,
     ] {
         let ok = inputs
             .iter()
@@ -3915,5 +4030,10 @@ mod tests {
         assert_eq!(IndexScan::MinOddIndices.eval(&[1, 9, 3, 2]), Some(2));
         assert_eq!(KClosed::CountEqK.eval(&[1, 5, 5, 2], 5), Some(2));
         assert_eq!(KClosed::SumGtK.eval(&[1, 5, 3, 2], 2), Some(8));
+        assert_eq!(KClosed::CountGtK.eval(&[1, 5, 3, 2], 2), Some(2));
+        assert_eq!(KClosed::SumLtK.eval(&[1, 5, 3, 2], 3), Some(3));
+        assert_eq!(DualAccum::MeanAbsTrunc.eval(&[-2, 4, -6]), Some(4));
+        assert_eq!(PairwiseScan::SumIncreases.eval(&[1, 5, 2, 9]), Some(11));
+        assert_eq!(PairwiseScan::SumDecreases.eval(&[9, 2, 8, 1]), Some(14));
     }
 }
