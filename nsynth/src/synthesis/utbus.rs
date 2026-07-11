@@ -751,6 +751,8 @@ enum DualAccum {
     Len,
     /// Whether the array is empty (1/0).
     IsEmpty,
+    /// 1 if all elements are equal (empty → 1), else 0.
+    AllEqual,
 }
 
 impl DualAccum {
@@ -779,6 +781,7 @@ impl DualAccum {
             DualAccum::CountOdds => "count_odds",
             DualAccum::Len => "len",
             DualAccum::IsEmpty => "is_empty",
+            DualAccum::AllEqual => "all_equal",
         }
     }
 
@@ -969,6 +972,17 @@ impl DualAccum {
             }
             DualAccum::Len => Some(arr.len() as i64),
             DualAccum::IsEmpty => Some(if arr.is_empty() { 1 } else { 0 }),
+            DualAccum::AllEqual => {
+                if arr.is_empty() {
+                    return Some(1);
+                }
+                let first = arr[0];
+                Some(if arr.iter().all(|&x| x == first) {
+                    1
+                } else {
+                    0
+                })
+            }
         }
     }
 
@@ -1251,6 +1265,18 @@ impl DualAccum {
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     if arr.len == 0 {{ return 1; }}\n\
     return 0;\n\
+}}\n"
+            ),
+            DualAccum::AllEqual => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 1; }}\n\
+    first: i64 = arr[0];\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] != first {{ return 0; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 1;\n\
 }}\n"
             ),
         }
@@ -1686,6 +1712,7 @@ fn try_dual_and_pairwise(
         DualAccum::CountOdds,
         DualAccum::Len,
         DualAccum::IsEmpty,
+        DualAccum::AllEqual,
     ] {
         let ok = inputs
             .iter()
