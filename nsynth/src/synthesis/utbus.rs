@@ -3484,6 +3484,8 @@ fn try_dual_and_pairwise(
         IndexScan::CountZeroOddIndices,
         IndexScan::MaxAbsEvenIndices,
         IndexScan::MaxAbsOddIndices,
+        IndexScan::MinAbsEvenIndices,
+        IndexScan::MinAbsOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -3605,6 +3607,10 @@ enum IndexScan {
     MaxAbsEvenIndices,
     /// Max absolute value at odd indices (no odd → 0).
     MaxAbsOddIndices,
+    /// Min absolute value at even indices (empty → 0).
+    MinAbsEvenIndices,
+    /// Min absolute value at odd indices (no odd → 0).
+    MinAbsOddIndices,
 }
 
 impl IndexScan {
@@ -3659,6 +3665,8 @@ impl IndexScan {
             IndexScan::CountZeroOddIndices => "count_zero_odd_indices",
             IndexScan::MaxAbsEvenIndices => "max_abs_even_indices",
             IndexScan::MaxAbsOddIndices => "max_abs_odd_indices",
+            IndexScan::MinAbsEvenIndices => "min_abs_even_indices",
+            IndexScan::MinAbsOddIndices => "min_abs_odd_indices",
         }
     }
 
@@ -4080,6 +4088,34 @@ impl IndexScan {
                     if i % 2 == 1 {
                         let a = v.abs();
                         if !found || a > best {
+                            best = a;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            IndexScan::MinAbsEvenIndices => {
+                let mut best = 0i64;
+                let mut found = false;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 0 {
+                        let a = v.abs();
+                        if !found || a < best {
+                            best = a;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            IndexScan::MinAbsOddIndices => {
+                let mut best = 0i64;
+                let mut found = false;
+                for (i, &v) in arr.iter().enumerate() {
+                    if i % 2 == 1 {
+                        let a = v.abs();
+                        if !found || a < best {
                             best = a;
                             found = true;
                         }
@@ -4689,6 +4725,45 @@ impl IndexScan {
     return best;\n\
 }}\n"
             ),
+            IndexScan::MinAbsEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if found == 0 {{\n\
+            best = a;\n\
+            found = 1;\n\
+        }} else {{\n\
+            if a < best {{ best = a; }}\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            IndexScan::MinAbsOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if found == 0 {{\n\
+            best = a;\n\
+            found = 1;\n\
+        }} else {{\n\
+            if a < best {{ best = a; }}\n\
+        }}\n\
+        i = i + 2;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -4762,6 +4837,10 @@ enum KClosed {
     SumAbsLeK,
     /// Count of elements with |v| == k.
     CountAbsEqK,
+    /// Count of elements with |v| >= k.
+    CountAbsGeK,
+    /// Count of elements with |v| <= k.
+    CountAbsLeK,
     /// First index where |arr[i]| >= k, else -1.
     FirstAbsGeK,
     /// Last index where |arr[i]| >= k, else -1.
@@ -4808,6 +4887,8 @@ impl KClosed {
             KClosed::SumAbsGeK => "sum_abs_ge_k",
             KClosed::SumAbsLeK => "sum_abs_le_k",
             KClosed::CountAbsEqK => "count_abs_eq_k",
+            KClosed::CountAbsGeK => "count_abs_ge_k",
+            KClosed::CountAbsLeK => "count_abs_le_k",
             KClosed::FirstAbsGeK => "first_abs_ge_k",
             KClosed::LastAbsGeK => "last_abs_ge_k",
             KClosed::FirstAbsEqK => "first_abs_eq_k",
@@ -5015,6 +5096,12 @@ impl KClosed {
             ),
             KClosed::CountAbsEqK => {
                 Some(arr.iter().filter(|&&v| v.abs() == k).count() as i64)
+            }
+            KClosed::CountAbsGeK => {
+                Some(arr.iter().filter(|&&v| v.abs() >= k).count() as i64)
+            }
+            KClosed::CountAbsLeK => {
+                Some(arr.iter().filter(|&&v| v.abs() <= k).count() as i64)
             }
             KClosed::FirstAbsGeK => {
                 for (i, &v) in arr.iter().enumerate() {
@@ -5446,7 +5533,33 @@ impl KClosed {
     return count;\n\
 }}\n"
             ),
-            KClosed::FirstAbsGeK => format!(
+                        KClosed::CountAbsGeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a >= k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            KClosed::CountAbsLeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a <= k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+KClosed::FirstAbsGeK => format!(
                 "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
     i: i64 = 0;\n\
     while i < arr.len {{\n\
@@ -5547,6 +5660,8 @@ fn try_k_closed(
         KClosed::SumAbsGeK,
         KClosed::SumAbsLeK,
         KClosed::CountAbsEqK,
+        KClosed::CountAbsGeK,
+        KClosed::CountAbsLeK,
         KClosed::FirstAbsGeK,
         KClosed::LastAbsGeK,
         KClosed::FirstAbsEqK,
@@ -6665,5 +6780,9 @@ mod tests {
         assert_eq!(IndexScan::MaxAbsEvenIndices.eval(&[-3, 9, 2, 8]), Some(3));
         assert_eq!(IndexScan::MaxAbsOddIndices.eval(&[-3, 9, 2, 8]), Some(9));
         assert_eq!(KClosed::LastAbsEqK.eval(&[5, 1, -5, 2], 5), Some(2));
+        assert_eq!(IndexScan::MinAbsEvenIndices.eval(&[-3, 9, 2, 8]), Some(2));
+        assert_eq!(IndexScan::MinAbsOddIndices.eval(&[-3, 9, 2, 8]), Some(8));
+        assert_eq!(KClosed::CountAbsGeK.eval(&[-5, 2, 4], 4), Some(2));
+        assert_eq!(KClosed::CountAbsLeK.eval(&[-5, 2, 4], 4), Some(2));
     }
 }

@@ -774,6 +774,8 @@ enum WordShape {
     ReverseLastWord,
     /// Concatenate words with no separator.
     ConcatWords,
+    /// Keep only the fourth word (index 3), else empty.
+    FourthWord,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -829,6 +831,7 @@ impl WordShape {
             WordShape::CapFirstWord => "cap_first_word",
             WordShape::ReverseLastWord => "reverse_last_word",
             WordShape::ConcatWords => "concat_words",
+            WordShape::FourthWord => "fourth_word",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1124,6 +1127,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             }
         }
         WordShape::ConcatWords => words.join(""),
+        WordShape::FourthWord => words.get(3).unwrap_or(&"").to_string(),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1281,7 +1285,17 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ConcatWords => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"\");\n}}\n"
         ),
-        WordShape::UpperEachWord => format!(
+                WordShape::FourthWord => format!(
+            "fn transform({p}: string) -> string {{
+    words: [string] = {p}.split("{sep}");
+    if words.len < 4 {{
+        return "";
+    }}
+    return words[3];
+}}
+"
+        ),
+WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::LowerEachWord => format!(
@@ -1311,7 +1325,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 48] = [
+    const SHAPES: [WordShape; 49] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1358,6 +1372,7 @@ pub fn synthesize_word_program(
         WordShape::CapFirstWord,
         WordShape::ReverseLastWord,
         WordShape::ConcatWords,
+        WordShape::FourthWord,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -2478,7 +2493,35 @@ pub fn synthesize_string_int_program(
             });
         }
     }
-    // Consonant count (ascii letters that are not vowels).
+        // Semicolon count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == ';').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \";\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-semicolon_count".to_string(),
+                error: None,
+            });
+        }
+    }
+// Consonant count (ascii letters that are not vowels).
     if examples.iter().all(|(s, o)| {
         s.chars()
             .filter(|c| c.is_ascii_alphabetic())
