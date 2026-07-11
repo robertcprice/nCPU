@@ -442,6 +442,10 @@ fn dual_any_non_zero(arr: &[i64]) -> i64 {
     if arr.iter().any(|&x| x != 0) { 1 } else { 0 }
 }
 
+fn dual_xor_all(arr: &[i64]) -> i64 {
+    arr.iter().copied().fold(0, |a, b| a ^ b)
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -1090,6 +1094,7 @@ mod tests {
         assert_eq!(dual_dot_index(&[10, 20, 30]), 80);
         assert_eq!(dual_sum_sq_diff_mean(&[1, 2, 3]), Some(2));
         assert_eq!(dual_any_non_zero(&[0, 0, 1]), 1);
+        assert_eq!(dual_xor_all(&[1, 2, 3]), 0);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1330,6 +1335,10 @@ fn reverse_first_word(s: &str, sep: &str) -> String {
     out.join(sep)
 }
 
+fn digit_sum(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_digit()).map(|c| (c as u8 - b'0') as i64).sum()
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1376,6 +1385,7 @@ mod tests {
         assert_eq!(alpha_count("Hi 2!"), 2);
         assert_eq!(cap_last_word("hello world", " "), "hello World");
         assert_eq!(reverse_first_word("abc def", " "), "cba def");
+        assert_eq!(digit_sum("a12b3"), 6);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }

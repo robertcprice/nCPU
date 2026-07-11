@@ -1736,6 +1736,39 @@ pub fn synthesize_string_int_program(
             }
         }
     }
+    // Sum of digit character values (e.g. "a12" → 1+2=3).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| c.is_ascii_digit())
+            .map(|c| (c as u8 - b'0') as i64)
+            .sum::<i64>()
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                total = total + (c.ord() - \"0\".ord());\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_sum".to_string(),
+                error: None,
+            });
+        }
+    }
     // Alphabetic char count.
     if examples
         .iter()

@@ -817,6 +817,8 @@ enum DualAccum {
     SumSqDiffMean,
     /// 1 if any element is non-zero, else 0.
     AnyNonZero,
+    /// XOR of all elements (empty → 0).
+    XorAll,
 }
 
 impl DualAccum {
@@ -878,6 +880,7 @@ impl DualAccum {
             DualAccum::DotIndex => "dot_index",
             DualAccum::SumSqDiffMean => "sum_sq_diff_mean",
             DualAccum::AnyNonZero => "any_non_zero",
+            DualAccum::XorAll => "xor_all",
         }
     }
 
@@ -922,7 +925,7 @@ impl DualAccum {
                 | DualAccum::ProductNegatives
                 | DualAccum::ProductEvens
                 | DualAccum::ProductOdds => Some(1),
-                DualAccum::SumCubes | DualAccum::DotIndex => Some(0),
+                DualAccum::SumCubes | DualAccum::DotIndex | DualAccum::XorAll => Some(0),
                 DualAccum::IsPalindrome => Some(1),
                 DualAccum::MeanAbsTrunc
                 | DualAccum::MeanTrunc
@@ -1339,6 +1342,7 @@ impl DualAccum {
             DualAccum::AnyNonZero => {
                 Some(if arr.iter().any(|&x| x != 0) { 1 } else { 0 })
             }
+            DualAccum::XorAll => Some(arr.iter().copied().fold(0i64, |a, b| a ^ b)),
         }
     }
 
@@ -2001,6 +2005,15 @@ impl DualAccum {
         if item != 0 {{ return 1; }}\n\
     }}\n\
     return 0;\n\
+}}\n"
+            ),
+            DualAccum::XorAll => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        total = total ^ item;\n\
+    }}\n\
+    return total;\n\
 }}\n"
             ),
         }
@@ -2861,6 +2874,7 @@ fn try_dual_and_pairwise(
         DualAccum::DotIndex,
         DualAccum::SumSqDiffMean,
         DualAccum::AnyNonZero,
+        DualAccum::XorAll,
     ] {
         let ok = inputs
             .iter()
@@ -5070,5 +5084,7 @@ mod tests {
         assert_eq!(DualAccum::AnyNonZero.eval(&[0, 0]), Some(0));
         assert_eq!(PairwiseScan::CountSignChanges.eval(&[1, 3, 2, 5, 0]), Some(3));
         assert_eq!(KClosed::MinLtK.eval(&[1, 5, 3, 2], 4), Some(1));
+        assert_eq!(DualAccum::XorAll.eval(&[1, 2, 3]), Some(0));
+        assert_eq!(DualAccum::XorAll.eval(&[7, 1]), Some(6));
     }
 }
