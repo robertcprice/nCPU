@@ -242,6 +242,38 @@ pub(super) fn recommended_post_enumerative_routes(
     routes
 }
 
+/// Routes whose synthesis TRAINS a differentiable program (gradient descent). Their training runs on
+/// worker threads that do NOT inherit the thread-local `TrainDeadline`, so a single such route runs
+/// unbounded — measured on `absval`: `synthesize_gradient_only` 49-54s and `expr_only` 87s, both
+/// MISSING — even under a set solve budget. These are deferred behind the cheap deterministic routes
+/// (templates / search / search_teacher, each <0.1s) so a problem a cheap route can solve is never
+/// forced to eat a training route's multi-second miss first (`absval` is a `loop_template` that the
+/// template route solves in 0.0s). NOTE: broader than `route_dwarfs_enumerative_guard` (which is only
+/// the >enumerative-cost gate) — it also includes `expr_only`, `register_machine` and `universal`,
+/// which likewise train and run unbounded.
+pub(super) fn route_is_unbounded_training(route: &'static str) -> bool {
+    matches!(
+        route,
+        ROUTE_SCALAR_GRADIENT
+            | ROUTE_ARRAY_GRADIENT
+            | ROUTE_BRIDGE_GRADIENT
+            | ROUTE_EXPR_ONLY
+            | ROUTE_REGISTER_MACHINE
+            | ROUTE_UNIVERSAL
+    )
+}
+
+/// Stable partition: cheap deterministic routes first, then the unbounded training routes — preserving
+/// the caller's order within each class. The SET is unchanged, so any problem that genuinely needs a
+/// training route still reaches it (after the cheap routes miss in milliseconds) and every result is
+/// still example-verified; this only cuts the pathological tail where a training route ran and MISSED
+/// before a cheap route that would have solved the problem. Applied to the COMBINED recommended+default
+/// list so cheap routes from either source precede all training routes.
+pub(super) fn defer_unbounded_training_routes(mut routes: Vec<&'static str>) -> Vec<&'static str> {
+    routes.sort_by_key(|route| route_is_unbounded_training(route)); // stable sort
+    routes
+}
+
 /// Routes whose per-problem cost dwarfs the enumerative guard stage.
 ///
 /// The enumerative pass is a cheap *guard*: on array/scalar problems it
@@ -375,4 +407,57 @@ pub(super) fn planned_post_enumerative_routes(
     }
 
     routes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defers_unbounded_training_routes_behind_cheap_ones_stably() {
+        // A route order (wrongly) ranking training routes among/ahead of the cheap deterministic ones
+        // — the `absval` shape where scalar-gradient (54s) AND expr_only (87s) ran before the template
+        // route that solves it in 0.0s.
+        let mixed = vec![
+            ROUTE_SCALAR_GRADIENT,
+            ROUTE_EXPR_ONLY,
+            ROUTE_SEARCH_TEACHER,
+            ROUTE_ARRAY_GRADIENT,
+            ROUTE_EXPR_TEMPLATES,
+            ROUTE_REGISTER_MACHINE,
+            ROUTE_SCALAR_TEMPLATES,
+        ];
+        let ordered = defer_unbounded_training_routes(mixed.clone());
+        // Same SET — nothing dropped, so a problem that genuinely needs a training route still reaches it.
+        assert_eq!(ordered.len(), mixed.len());
+        assert!(mixed.iter().all(|r| ordered.contains(r)));
+        // Cheap deterministic routes first (in original relative order), then training routes (likewise).
+        assert_eq!(
+            ordered,
+            vec![
+                ROUTE_SEARCH_TEACHER,
+                ROUTE_EXPR_TEMPLATES,
+                ROUTE_SCALAR_TEMPLATES,
+                ROUTE_SCALAR_GRADIENT,
+                ROUTE_EXPR_ONLY,
+                ROUTE_ARRAY_GRADIENT,
+                ROUTE_REGISTER_MACHINE,
+            ]
+        );
+        // Once a training route appears, everything after it is also a training route.
+        let first_training = ordered.iter().position(|r| route_is_unbounded_training(r)).unwrap();
+        assert!(
+            ordered[first_training..].iter().all(|r| route_is_unbounded_training(r)),
+            "no cheap route may appear after a training route: {ordered:?}"
+        );
+        // expr_only IS classified as training (the 87s trap the first fix missed).
+        assert!(route_is_unbounded_training(ROUTE_EXPR_ONLY));
+    }
+
+    #[test]
+    fn all_cheap_order_is_untouched() {
+        // With no training routes present, the order is byte-identical (pure no-op).
+        let cheap = vec![ROUTE_SEARCH_TEACHER, ROUTE_EXPR_TEMPLATES, ROUTE_SCALAR_TEMPLATES];
+        assert_eq!(defer_unbounded_training_routes(cheap.clone()), cheap);
+    }
 }

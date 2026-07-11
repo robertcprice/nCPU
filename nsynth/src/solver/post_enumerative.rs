@@ -13,7 +13,8 @@ use crate::runtime::verify_problem_code_strict;
 use crate::synthesis;
 
 use super::routing::{
-    default_post_enumerative_routes, post_enumerative_context, recommended_post_enumerative_routes,
+    default_post_enumerative_routes, defer_unbounded_training_routes, post_enumerative_context,
+    recommended_post_enumerative_routes,
     route_is_applicable, PostEnumerativeContext, ROUTE_ARRAY_GRADIENT,
     ROUTE_ARRAY_REFERENCE_DISTILLATION, ROUTE_BRIDGE_GRADIENT, ROUTE_EXPR_ONLY,
     ROUTE_EXPR_TEMPLATES, ROUTE_NATIVE_REFERENCE_DISTILLATION, ROUTE_REFERENCE_DISTILLATION,
@@ -597,8 +598,6 @@ pub(super) fn solve_problem_after_enumeration(
     }
 
     let recommended_routes = recommended_post_enumerative_routes(problem, &ctx);
-    let mut attempted_routes: HashSet<&'static str> = HashSet::new();
-
     if !recommended_routes.is_empty() {
         eprintln!(
             "[solve] method_router rec: {}",
@@ -606,23 +605,26 @@ pub(super) fn solve_problem_after_enumeration(
         );
     }
 
-    for route in recommended_routes {
-        attempted_routes.insert(route);
-        if let Some(result) = try_post_enumerative_route(problem, &ctx, t0, route) {
-            if result.success {
-                method_router::record_win(problem, route);
-            } else {
-                method_router::record_miss(problem, route);
-            }
-            return result;
+    // Build the full ordered portfolio: the learned recommendation first, then the curated default for
+    // anything it omitted (deduped, preserving each source's order). Then defer the UNBOUNDED TRAINING
+    // routes (gradient / expr_only / register-machine / universal) behind the cheap deterministic ones
+    // ACROSS THE WHOLE LIST — a cheap route from the default list (e.g. the `expr_templates` that solves
+    // `absval` in 0.0s) must precede a training route from the recommendation, which would otherwise
+    // MISS for 50-90s first (its worker-thread training ignores the solve budget). Every route is still
+    // tried, so coverage is unchanged; this only moves WHEN the expensive misses run.
+    let mut portfolio: Vec<&'static str> = Vec::new();
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    for route in recommended_routes
+        .into_iter()
+        .chain(default_post_enumerative_routes(problem, &ctx))
+    {
+        if seen.insert(route) {
+            portfolio.push(route);
         }
-        method_router::record_miss(problem, route);
     }
+    let portfolio = defer_unbounded_training_routes(portfolio);
 
-    for route in default_post_enumerative_routes(problem, &ctx) {
-        if !attempted_routes.insert(route) {
-            continue;
-        }
+    for route in portfolio {
         if let Some(result) = try_post_enumerative_route(problem, &ctx, t0, route) {
             if result.success {
                 method_router::record_win(problem, route);
