@@ -681,6 +681,15 @@ fn last_word(s: &str, sep: &str) -> String {
     s.split(sep).last().unwrap_or("").to_string()
 }
 
+fn duplicate_each(s: &str, sep: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for w in s.split(sep) {
+        out.push(w);
+        out.push(w);
+    }
+    out.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,6 +707,7 @@ mod tests {
         assert_eq!(drop_first("keep the rest", " "), "the rest");
         assert_eq!(first_word("alpha beta gamma", " "), "alpha");
         assert_eq!(last_word("alpha beta gamma", " "), "gamma");
+        assert_eq!(duplicate_each("a b", " "), "a a b b");
     }
 }
 EOF
