@@ -1077,6 +1077,10 @@ enum DualAccum {
     LcmAbsEvenNonZero,
     /// LCM of abs of odd-valued non-zero elements (none → 1).
     LcmAbsOddNonZero,
+    /// Truncating mean of abs of even-valued non-zero elements (none → 0).
+    MeanAbsEvenNonZeroTrunc,
+    /// Truncating mean of abs of odd-valued non-zero elements (none → 0).
+    MeanAbsOddNonZeroTrunc,
 }
 
 impl DualAccum {
@@ -1268,6 +1272,8 @@ impl DualAccum {
             DualAccum::GcdAbsOddNonZero => "gcd_abs_odd_non_zero",
             DualAccum::LcmAbsEvenNonZero => "lcm_abs_even_non_zero",
             DualAccum::LcmAbsOddNonZero => "lcm_abs_odd_non_zero",
+            DualAccum::MeanAbsEvenNonZeroTrunc => "mean_abs_even_non_zero_trunc",
+            DualAccum::MeanAbsOddNonZeroTrunc => "mean_abs_odd_non_zero_trunc",
         }
     }
 
@@ -1339,6 +1345,8 @@ impl DualAccum {
                 | DualAccum::SumAbsOddNonZero
                 | DualAccum::GcdAbsEvenNonZero
                 | DualAccum::GcdAbsOddNonZero
+                | DualAccum::MeanAbsEvenNonZeroTrunc
+                | DualAccum::MeanAbsOddNonZeroTrunc
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -2781,6 +2789,32 @@ impl DualAccum {
                     }
                 }
                 Some(l.unwrap_or(1))
+            }
+            DualAccum::MeanAbsEvenNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 == 0 && x != 0)
+                    .map(|x| x.abs())
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
+            DualAccum::MeanAbsOddNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 != 0 && x != 0)
+                    .map(|x| x.abs())
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
             }
         }
     }
@@ -5385,6 +5419,47 @@ DualAccum::SumSquaresOdds => format!(
 }}\n"
             ),
 
+            DualAccum::MeanAbsEvenNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                total = total + a;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
+            DualAccum::MeanAbsOddNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    n: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if item != 0 {{\n\
+                a: i64 = item;\n\
+                if a < 0 {{ a = 0 - a; }}\n\
+                total = total + a;\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    if n == 0 {{\n\
+        return 0;\n\
+    }}\n\
+    return total / n;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -6527,6 +6602,8 @@ fn try_dual_and_pairwise(
         DualAccum::GcdAbsOddNonZero,
         DualAccum::LcmAbsEvenNonZero,
         DualAccum::LcmAbsOddNonZero,
+        DualAccum::MeanAbsEvenNonZeroTrunc,
+        DualAccum::MeanAbsOddNonZeroTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -9054,6 +9131,8 @@ enum KClosed {
     LastIndexDivisibleByK,
     /// Sum of |v| for elements divisible by k (k == 0 → None).
     AbsSumDivisibleByK,
+    /// Product of |v| for elements divisible by k (k == 0 → None; empty → 1).
+    AbsProductDivisibleByK,
 }
 
 impl KClosed {
@@ -9169,6 +9248,7 @@ impl KClosed {
             KClosed::FirstIndexDivisibleByK => "first_index_divisible_by_k",
             KClosed::LastIndexDivisibleByK => "last_index_divisible_by_k",
             KClosed::AbsSumDivisibleByK => "abs_sum_divisible_by_k",
+            KClosed::AbsProductDivisibleByK => "abs_product_divisible_by_k",
         }
     }
 
@@ -10023,6 +10103,17 @@ impl KClosed {
                         .filter(|&&v| v % k == 0)
                         .map(|&v| v.abs())
                         .fold(0i64, i64::saturating_add),
+                )
+            }
+            KClosed::AbsProductDivisibleByK => {
+                if k == 0 {
+                    return None;
+                }
+                Some(
+                    arr.iter()
+                        .filter(|&&v| v % k == 0)
+                        .map(|&v| v.abs())
+                        .fold(1i64, i64::saturating_mul),
                 )
             }
         }
@@ -11573,6 +11664,20 @@ KClosed::MinWhereAbsNeK => format!(
 }}\n"
             ),
 
+            KClosed::AbsProductDivisibleByK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    prod: i64 = 1;\n\
+    for item in arr {{\n\
+        if item % k == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            prod = prod * a;\n\
+        }}\n\
+    }}\n\
+    return prod;\n\
+}}\n"
+            ),
+
         }
     }
 }
@@ -11695,6 +11800,7 @@ fn try_k_closed(
         KClosed::FirstIndexDivisibleByK,
         KClosed::LastIndexDivisibleByK,
         KClosed::AbsSumDivisibleByK,
+        KClosed::AbsProductDivisibleByK,
     ] {
         let ok = inputs
             .iter()
@@ -13057,5 +13163,9 @@ mod tests {
         assert_eq!(DualAccum::LcmAbsOddNonZero.eval(&[0, 3, 5, 2]), Some(15));
         assert_eq!(DualAccum::LcmAbsEvenNonZero.eval(&[0, 1, 3]), Some(1));
         assert_eq!(KClosed::AbsSumDivisibleByK.eval(&[-4, 3, 6], 2), Some(10));
+        assert_eq!(DualAccum::MeanAbsEvenNonZeroTrunc.eval(&[0, -4, 2, 3]), Some(3));
+        assert_eq!(DualAccum::MeanAbsOddNonZeroTrunc.eval(&[0, -5, 3, 2]), Some(4));
+        assert_eq!(DualAccum::MeanAbsEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::AbsProductDivisibleByK.eval(&[-4, 3, 6], 2), Some(24));
     }
 }
