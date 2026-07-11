@@ -397,6 +397,115 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         ));
                         fresh.push(Expr { outs, mog: format!("sortw_{k_name}({})", e.mog), helpers, depth });
                     }
+                    // FILTER the word list by even/odd character length — unlocks
+                    // split→filter→join compositions (C1 filter-words in the enum).
+                    for (tag, keep_even) in [("even", true), ("odd", false)] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                V::L(
+                                    l.iter()
+                                        .filter(|w| {
+                                            let n = w.chars().count();
+                                            if keep_even {
+                                                n % 2 == 0
+                                            } else {
+                                                n % 2 != 0
+                                            }
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        let cond = if keep_even {
+                            "w.len % 2 == 0"
+                        } else {
+                            "w.len % 2 != 0"
+                        };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn filterw_{tag}(ws: [string]) -> [string] {{\n\
+    out: [string] = [];\n\
+    for w in ws {{\n\
+        if {cond} {{\n\
+            out.push(w);\n\
+        }}\n\
+    }}\n\
+    return out;\n\
+}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("filterw_{tag}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
+                    // FILTER by absolute length thresholds (short / long words).
+                    for tag in ["gt1", "gt2", "eq1", "lt2", "eq2", "gt3", "eq3", "lt3", "eq4", "gt4", "lt4"] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                V::L(
+                                    l.iter()
+                                        .filter(|w| {
+                                            let n = w.chars().count();
+                                            match tag {
+                                                "gt1" => n > 1,
+                                                "gt2" => n > 2,
+                                                "gt3" => n > 3,
+                                                "gt4" => n > 4,
+                                                "lt2" => n < 2,
+                                                "lt3" => n < 3,
+                                                "lt4" => n < 4,
+                                                "eq2" => n == 2,
+                                                "eq3" => n == 3,
+                                                "eq4" => n == 4,
+                                                _ => n == 1,
+                                            }
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        let cond_mog = match tag {
+                            "gt1" => "w.len > 1",
+                            "gt2" => "w.len > 2",
+                            "gt3" => "w.len > 3",
+                            "gt4" => "w.len > 4",
+                            "lt2" => "w.len < 2",
+                            "lt3" => "w.len < 3",
+                            "lt4" => "w.len < 4",
+                            "eq2" => "w.len == 2",
+                            "eq3" => "w.len == 3",
+                            "eq4" => "w.len == 4",
+                            _ => "w.len == 1",
+                        };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn filterw_{tag}(ws: [string]) -> [string] {{\n\
+    out: [string] = [];\n\
+    for w in ws {{\n\
+        if {cond_mog} {{\n\
+            out.push(w);\n\
+        }}\n\
+    }}\n\
+    return out;\n\
+}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("filterw_{tag}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
                     // join with " " -> Str.
                     let outs: Vec<V> = e
                         .outs

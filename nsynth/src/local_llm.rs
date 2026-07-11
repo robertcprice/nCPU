@@ -458,6 +458,85 @@ pub fn propose_rust_fn(request: &str, prior: Option<(&str, &str)>, temperature: 
     extract_code(content)
 }
 
+/// Propose a plain-**Python** function for the dual-lane union (Lane B). Same
+/// gated curl shape as [`propose_rust_fn`]; the caller verifies against the
+/// task's own asserts (never-wrong). Inert without `NSYNTH_LOCAL_LLM_URL`.
+pub fn propose_python_fn(request: &str, test_asserts: &str) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "You are an expert Python programmer. Output ONLY one function in a \
+               ```python code block — no explanation, no tests, no main.";
+    let user = format!(
+        "{sys}\n\nTask:\n{request}\n\nYour function must pass:\n{test_asserts}\n\n/no_think"
+    );
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": user}],
+        "chat_template_kwargs": {"enable_thinking": false},
+        "temperature": 0.2,
+        "max_tokens": 2048
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s",
+            "-m",
+            "180",
+            &url,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    extract_python_code(content)
+}
+
+/// Prefer the last ```python (or bare ```) fence that looks like a function.
+fn extract_python_code(content: &str) -> Option<String> {
+    let parts: Vec<&str> = content.split("```").collect();
+    let mut last = None;
+    for (i, part) in parts.iter().enumerate() {
+        if i % 2 == 1 {
+            let body = part
+                .strip_prefix("python")
+                .or_else(|| part.strip_prefix("py"))
+                .unwrap_or(part)
+                .trim_start_matches('\n')
+                .trim();
+            if body.contains("def ") {
+                last = Some(body.to_string());
+            }
+        }
+    }
+    last.or_else(|| {
+        content.find("def ").map(|i| {
+            content[i..]
+                .lines()
+                .take_while(|l| {
+                    l.is_empty()
+                        || l.starts_with(' ')
+                        || l.starts_with('\t')
+                        || l.starts_with("def ")
+                        || l.starts_with('@')
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    })
+}
+
 /// Extract a Mog function from the model output: prefer a fenced ``` block; else
 /// take from the first `fn ` through its balanced closing brace.
 fn extract_code(content: &str) -> Option<String> {

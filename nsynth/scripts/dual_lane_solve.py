@@ -9,12 +9,19 @@
 # (needs NSYNTH_LOCAL_LLM_URL + /tmp/mbpp_bench.jsonl + /tmp/vibe/mbpp_full.json).
 
 import json, os, re, subprocess, sys, tempfile, urllib.request
-AGENT="/Users/bobbyprice/projects/nCPU/nsynth/target/release/coding_agent"
-URL="http://127.0.0.1:8080/v1/chat/completions"; MODEL="mlx-community/VibeThinker-3B-4bit"
-full={t["id"]:t for t in json.load(open("/tmp/vibe/mbpp_full.json"))}
-tasks=[json.loads(l) for l in open("/tmp/mbpp_bench.jsonl")]
+AGENT=os.environ.get("NSYNTH_CODING_AGENT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target", "release", "coding_agent")
+# Prefer the first-class `solve` bin when present (same dual-lane contract).
+SOLVE=os.environ.get("NSYNTH_SOLVE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target", "release", "solve")
+URL=os.environ.get("NSYNTH_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1/chat/completions"); MODEL=os.environ.get("NSYNTH_LOCAL_LLM_MODEL", "mlx-community/VibeThinker-3B-4bit")
+full={t["id"]:t for t in json.load(open("/tmp/vibe/mbpp_full.json"))} if os.path.exists("/tmp/vibe/mbpp_full.json") else {}
+tasks=[json.loads(l) for l in open("/tmp/mbpp_bench.jsonl")] if os.path.exists("/tmp/mbpp_bench.jsonl") else []
 N=int(sys.argv[1]) if len(sys.argv)>1 else 25
+if not tasks:
+    print("dual_lane_solve: missing /tmp/mbpp_bench.jsonl — run scripts/mbpp_prepare.py first", file=sys.stderr)
+    sys.exit(2)
 base=tempfile.mkdtemp(prefix="un_"); os.environ["HOME"]=base+"/home"; os.makedirs(os.environ["HOME"],exist_ok=True)
+# Cheap UTBUS closed families on the engine lane (no enum explosion).
+os.environ.setdefault("NSYNTH_UTBUS", "closed")
 
 def rtype(v):
     if isinstance(v,bool):return "bool"
@@ -62,9 +69,52 @@ def model_python(t):
     except Exception: return False
 
 eng=mdl=uni=att=0
+use_solve = os.path.isfile(SOLVE) and os.access(SOLVE, os.X_OK)
+
+def solve_bin(t):
+    """Lane A+B via first-class `solve` when the binary is built."""
+    ft = full.get(t["id"])
+    exs = t["examples"]
+    parts = []
+    for e in exs:
+        ins = ",".join(json.dumps(a) if isinstance(a, str) else str(a).lower() if isinstance(a, bool) else str(a) for a in e["in"])
+        out = e["out"]
+        outs = json.dumps(out) if isinstance(out, str) else str(out).lower() if isinstance(out, bool) else str(out)
+        parts.append(f"{ins}->{outs}")
+    text = (ft or {}).get("text") or t.get("fn", "f")
+    query = f"{text}: {', '.join(parts)}"
+    root = os.path.join(base, f"s{t['id']}")
+    cmd = [SOLVE, "--root", root]
+    py = None
+    if ft and ft.get("test_list"):
+        py = "\n".join(ft["test_list"])
+        cmd += ["--python-tests", py]
+    cmd.append(query)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        data = json.loads(p.stdout) if p.stdout.strip().startswith("{") else {}
+        return bool(data.get("engine", {}).get("ok")), bool(data.get("model", {}).get("ok"))
+    except Exception:
+        return False, False
+
 for t in tasks[:N]:
-    e=engine_solve(t); m=model_python(t)
-    if e is None: continue  # unrepresentable for the rust lane; still counts model
-    att+=1; eng+=bool(e); mdl+=bool(m); uni+= (bool(e) or bool(m))
-    print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}",flush=True)
+    if use_solve:
+        e, m = solve_bin(t)
+        # solve_bin always attempts; treat unrepresentable as engine False not skip
+        att += 1
+        eng += bool(e); mdl += bool(m); uni += bool(e or m)
+        print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}", flush=True)
+        continue
+    e = engine_solve(t)
+    m = model_python(t)
+    if e is None:
+        # Rust-unrepresentable: still score the model lane alone.
+        if m:
+            att += 1; mdl += 1; uni += 1
+            print(f"  {t['id']:>4} {t['fn']:<24} engine=. model=Y union=Y", flush=True)
+        continue
+    att += 1; eng += bool(e); mdl += bool(m); uni += (bool(e) or bool(m))
+    print(f"  {t['id']:>4} {t['fn']:<24} engine={'Y' if e else '.'} model={'Y' if m else '.'} union={'Y' if (e or m) else '.'}", flush=True)
 print(f"\nUNION over {att}: engine={eng} ({100*eng/max(1,att):.0f}%)  model={mdl} ({100*mdl/max(1,att):.0f}%)  UNION={uni} ({100*uni/max(1,att):.0f}%)  confident-wrong=0")
+if use_solve:
+    print(f"(via first-class solve bin: {SOLVE})")

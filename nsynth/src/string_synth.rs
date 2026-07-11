@@ -688,6 +688,8 @@ enum WordShape {
     ReverseEachWord,
     /// Sort the words ascending (lexicographic), rejoin.
     SortWords,
+    /// Sort the words descending (lexicographic), rejoin.
+    SortWordsDesc,
     /// Reverse the ORDER of the words, rejoin.
     ReverseWordOrder,
     /// The single longest word (first on a length tie).
@@ -696,6 +698,74 @@ enum WordShape {
     ShortestWord,
     /// First character of each word, concatenated (initials): "hi there" -> "ht".
     Initials,
+    /// Keep words whose char-count is even (order-preserving filter).
+    FilterEvenLen,
+    /// Keep words whose char-count is odd (order-preserving filter).
+    FilterOddLen,
+    /// Keep words with length > 2.
+    FilterLenGt2,
+    /// Keep words with length < 2 (single-char / empty).
+    FilterLenLt2,
+    /// Collapse consecutive equal words (run-length of 1).
+    DedupAdjacent,
+    /// Swap the first and last words (identity if <2 words).
+    SwapFirstLast,
+    /// Drop the first word, rejoin.
+    DropFirst,
+    /// Drop the last word, rejoin.
+    DropLast,
+    /// First word only.
+    FirstWord,
+    /// Last word only.
+    LastWord,
+    /// Duplicate each word in place: "a b" → "a a b b".
+    DuplicateEach,
+    /// Keep words with length == 2.
+    FilterLenEq2,
+    /// Keep words with length > 3.
+    FilterLenGt3,
+    /// Keep words with length == 3.
+    FilterLenEq3,
+    /// Keep words with length < 3.
+    FilterLenLt3,
+    /// Keep words with length == 4.
+    FilterLenEq4,
+    /// Keep words with length > 4.
+    FilterLenGt4,
+    /// Keep words with length < 4.
+    FilterLenLt4,
+    /// Dedup all words preserving first-occurrence order.
+    DedupAll,
+    /// Sort words by ascending character length (stable on ties via sort_by_key).
+    SortByLen,
+    /// Keep only the first two words.
+    TakeFirstTwo,
+    /// Keep only the first three words.
+    TakeFirstThree,
+    /// Drop the first two words, rejoin.
+    DropFirstTwo,
+    /// Drop the first three words, rejoin.
+    DropFirstThree,
+    /// Keep only the last two words.
+    TakeLastTwo,
+    /// Keep only the last three words.
+    TakeLastThree,
+    /// Drop the last two words, rejoin.
+    DropLastTwo,
+    /// Drop the last three words, rejoin.
+    DropLastThree,
+    /// Capitalize only the last word (first char upper).
+    CapLastWord,
+    /// Reverse characters of the first word only.
+    ReverseFirstWord,
+    /// Capitalize only the first word (first char upper).
+    CapFirstWord,
+    /// Reverse characters of the last word only.
+    ReverseLastWord,
+    /// Uppercase every word in place.
+    UpperEachWord,
+    /// Lowercase every word in place.
+    LowerEachWord,
 }
 
 impl WordShape {
@@ -704,10 +774,45 @@ impl WordShape {
             WordShape::TitleCase => "title_case",
             WordShape::ReverseEachWord => "reverse_each_word",
             WordShape::SortWords => "sort_words",
+            WordShape::SortWordsDesc => "sort_words_desc",
             WordShape::ReverseWordOrder => "reverse_word_order",
             WordShape::LongestWord => "longest_word",
             WordShape::ShortestWord => "shortest_word",
             WordShape::Initials => "initials",
+            WordShape::FilterEvenLen => "filter_even_len",
+            WordShape::FilterOddLen => "filter_odd_len",
+            WordShape::FilterLenGt2 => "filter_len_gt2",
+            WordShape::FilterLenLt2 => "filter_len_lt2",
+            WordShape::DedupAdjacent => "dedup_adjacent",
+            WordShape::SwapFirstLast => "swap_first_last",
+            WordShape::DropFirst => "drop_first",
+            WordShape::DropLast => "drop_last",
+            WordShape::FirstWord => "first_word",
+            WordShape::LastWord => "last_word",
+            WordShape::DuplicateEach => "duplicate_each",
+            WordShape::FilterLenEq2 => "filter_len_eq2",
+            WordShape::FilterLenGt3 => "filter_len_gt3",
+            WordShape::FilterLenEq3 => "filter_len_eq3",
+            WordShape::FilterLenLt3 => "filter_len_lt3",
+            WordShape::FilterLenEq4 => "filter_len_eq4",
+            WordShape::FilterLenGt4 => "filter_len_gt4",
+            WordShape::FilterLenLt4 => "filter_len_lt4",
+            WordShape::DedupAll => "dedup_all",
+            WordShape::SortByLen => "sort_by_len",
+            WordShape::TakeFirstTwo => "take_first_two",
+            WordShape::TakeFirstThree => "take_first_three",
+            WordShape::DropFirstTwo => "drop_first_two",
+            WordShape::DropFirstThree => "drop_first_three",
+            WordShape::TakeLastTwo => "take_last_two",
+            WordShape::TakeLastThree => "take_last_three",
+            WordShape::DropLastTwo => "drop_last_two",
+            WordShape::DropLastThree => "drop_last_three",
+            WordShape::CapLastWord => "cap_last_word",
+            WordShape::ReverseFirstWord => "reverse_first_word",
+            WordShape::CapFirstWord => "cap_first_word",
+            WordShape::ReverseLastWord => "reverse_last_word",
+            WordShape::UpperEachWord => "upper_each_word",
+            WordShape::LowerEachWord => "lower_each_word",
         }
     }
 }
@@ -740,6 +845,12 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             ws.sort_unstable();
             ws.join(sep)
         }
+        WordShape::SortWordsDesc => {
+            let mut ws = words.clone();
+            ws.sort_unstable();
+            ws.reverse();
+            ws.join(sep)
+        }
         WordShape::ReverseWordOrder => {
             let mut ws = words.clone();
             ws.reverse();
@@ -770,6 +881,219 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .iter()
             .map(|w| w.chars().next().map(String::from).unwrap_or_default())
             .collect::<String>(),
+        WordShape::FilterEvenLen => words
+            .iter()
+            .filter(|w| w.chars().count() % 2 == 0)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterOddLen => words
+            .iter()
+            .filter(|w| w.chars().count() % 2 == 1)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenGt2 => words
+            .iter()
+            .filter(|w| w.chars().count() > 2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenLt2 => words
+            .iter()
+            .filter(|w| w.chars().count() < 2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::DedupAdjacent => {
+            let mut out: Vec<&str> = Vec::new();
+            for w in words {
+                if out.last().copied() != Some(w) {
+                    out.push(w);
+                }
+            }
+            out.join(sep)
+        }
+        WordShape::SwapFirstLast => {
+            if words.len() < 2 {
+                return words.join(sep);
+            }
+            let mut ws = words.clone();
+            let last = ws.len() - 1;
+            ws.swap(0, last);
+            ws.join(sep)
+        }
+        WordShape::DropFirst => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                words[1..].join(sep)
+            }
+        }
+        WordShape::DropLast => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                words[..words.len() - 1].join(sep)
+            }
+        }
+        WordShape::FirstWord => words.first().unwrap_or(&"").to_string(),
+        WordShape::LastWord => words.last().unwrap_or(&"").to_string(),
+        WordShape::DuplicateEach => {
+            let mut out: Vec<&str> = Vec::with_capacity(words.len() * 2);
+            for w in words {
+                out.push(w);
+                out.push(w);
+            }
+            out.join(sep)
+        }
+        WordShape::FilterLenEq2 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 2)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenGt3 => words
+            .into_iter()
+            .filter(|w| w.chars().count() > 3)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenEq3 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 3)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenLt3 => words
+            .into_iter()
+            .filter(|w| w.chars().count() < 3)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenEq4 => words
+            .into_iter()
+            .filter(|w| w.chars().count() == 4)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenGt4 => words
+            .into_iter()
+            .filter(|w| w.chars().count() > 4)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenLt4 => words
+            .into_iter()
+            .filter(|w| w.chars().count() < 4)
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::DedupAll => {
+            let mut out: Vec<&str> = Vec::new();
+            for w in words {
+                if !out.contains(&w) {
+                    out.push(w);
+                }
+            }
+            out.join(sep)
+        }
+        WordShape::SortByLen => {
+            let mut owned: Vec<String> = words.into_iter().map(|w| w.to_string()).collect();
+            owned.sort_by_key(|w| w.chars().count());
+            owned.join(sep)
+        }
+        WordShape::TakeFirstTwo => {
+            let n = words.len().min(2);
+            words[..n].join(sep)
+        }
+        WordShape::TakeFirstThree => {
+            let n = words.len().min(3);
+            words[..n].join(sep)
+        }
+        WordShape::DropFirstTwo => {
+            if words.len() <= 2 {
+                String::new()
+            } else {
+                words[2..].join(sep)
+            }
+        }
+        WordShape::DropFirstThree => {
+            if words.len() <= 3 {
+                String::new()
+            } else {
+                words[3..].join(sep)
+            }
+        }
+        WordShape::TakeLastTwo => {
+            if words.len() <= 2 {
+                words.join(sep)
+            } else {
+                words[words.len() - 2..].join(sep)
+            }
+        }
+        WordShape::TakeLastThree => {
+            if words.len() <= 3 {
+                words.join(sep)
+            } else {
+                words[words.len() - 3..].join(sep)
+            }
+        }
+        WordShape::DropLastTwo => {
+            if words.len() <= 2 {
+                String::new()
+            } else {
+                words[..words.len() - 2].join(sep)
+            }
+        }
+        WordShape::DropLastThree => {
+            if words.len() <= 3 {
+                String::new()
+            } else {
+                words[..words.len() - 3].join(sep)
+            }
+        }
+        WordShape::CapLastWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                let last = out.len() - 1;
+                out[last] = cap_first(&out[last]);
+                out.join(sep)
+            }
+        }
+        WordShape::ReverseFirstWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                out[0] = out[0].chars().rev().collect();
+                out.join(sep)
+            }
+        }
+        WordShape::CapFirstWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                out[0] = cap_first(&out[0]);
+                out.join(sep)
+            }
+        }
+        WordShape::ReverseLastWord => {
+            if words.is_empty() {
+                String::new()
+            } else {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                let last = out.len() - 1;
+                out[last] = out[last].chars().rev().collect();
+                out.join(sep)
+            }
+        }
+        WordShape::UpperEachWord => words
+            .iter()
+            .map(|w| w.to_uppercase())
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::LowerEachWord => words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(sep),
     }
 }
 
@@ -788,6 +1112,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::SortWords => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").sort().join(\"{sep}\");\n}}\n"
         ),
+        WordShape::SortWordsDesc => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").sort().reverse().join(\"{sep}\");\n}}\n"
+        ),
         WordShape::ReverseWordOrder => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").reverse().join(\"{sep}\");\n}}\n"
         ),
@@ -799,6 +1126,108 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         ),
         WordShape::Initials => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].slice(0, 1));\n        i = i + 1;\n    }}\n    return out.join(\"\");\n}}\n"
+        ),
+        WordShape::FilterEvenLen => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterOddLen => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 1 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenGt2 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenLt2 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DedupAdjacent => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if out.len == 0 {{\n            out.push(words[i]);\n        }} else {{\n            if words[i] != out[out.len - 1] {{\n                out.push(words[i]);\n            }}\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::SwapFirstLast => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 2 {{\n        return {p};\n    }}\n    out: [string] = [];\n    out.push(words[words.len - 1]);\n    i: i64 = 1;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    out.push(words[0]);\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropFirst => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropLast => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    return words[0];\n}}\n"
+        ),
+        WordShape::LastWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    return words[words.len - 1];\n}}\n"
+        ),
+        WordShape::DuplicateEach => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i]);\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenEq2 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenGt3 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenEq3 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenLt3 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenEq4 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len == 4 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenGt4 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 4 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenLt4 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 4 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DedupAll => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        seen: i64 = 0;\n        j: i64 = 0;\n        while j < out.len {{\n            if out[j] == words[i] {{\n                seen = 1;\n            }}\n            j = j + 1;\n        }}\n        if seen == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::SortByLen => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    i: i64 = 0;\n    while i < words.len {{\n        j: i64 = i + 1;\n        while j < words.len {{\n            if words[j].len < words[i].len {{\n                tmp: string = words[i];\n                words[i] = words[j];\n                words[j] = tmp;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return words.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::TakeFirstTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if i < 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::TakeFirstThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if i < 3 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropFirstTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 2;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropFirstThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 3;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::TakeLastTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 2 {{\n        start = words.len - 2;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::TakeLastThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    start: i64 = 0;\n    if words.len > 3 {{\n        start = words.len - 3;\n    }}\n    i: i64 = start;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropLastTwo => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 2 {{\n        end = end - 2;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DropLastThree => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 3 {{\n        end = end - 3;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::CapLastWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    w: string = words[words.len - 1];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::ReverseFirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    out.push(words[0].reverse());\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::CapFirstWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    w: string = words[0];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    i: i64 = 1;\n    while i < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::ReverseLastWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    out.push(words[words.len - 1].reverse());\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::UpperEachWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::LowerEachWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].lower());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
     }
 }
@@ -824,14 +1253,49 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 7] = [
+    const SHAPES: [WordShape; 42] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
+        WordShape::SortWordsDesc,
         WordShape::ReverseWordOrder,
         WordShape::LongestWord,
         WordShape::ShortestWord,
         WordShape::Initials,
+        WordShape::FilterEvenLen,
+        WordShape::FilterOddLen,
+        WordShape::FilterLenGt2,
+        WordShape::FilterLenLt2,
+        WordShape::DedupAdjacent,
+        WordShape::SwapFirstLast,
+        WordShape::DropFirst,
+        WordShape::DropLast,
+        WordShape::FirstWord,
+        WordShape::LastWord,
+        WordShape::DuplicateEach,
+        WordShape::FilterLenEq2,
+        WordShape::FilterLenGt3,
+        WordShape::FilterLenEq3,
+        WordShape::FilterLenLt3,
+        WordShape::FilterLenEq4,
+        WordShape::FilterLenGt4,
+        WordShape::FilterLenLt4,
+        WordShape::DedupAll,
+        WordShape::SortByLen,
+        WordShape::TakeFirstTwo,
+        WordShape::TakeFirstThree,
+        WordShape::DropFirstTwo,
+        WordShape::DropFirstThree,
+        WordShape::TakeLastTwo,
+        WordShape::TakeLastThree,
+        WordShape::DropLastTwo,
+        WordShape::DropLastThree,
+        WordShape::CapLastWord,
+        WordShape::ReverseFirstWord,
+        WordShape::CapFirstWord,
+        WordShape::ReverseLastWord,
+        WordShape::UpperEachWord,
+        WordShape::LowerEachWord,
     ];
     for sep in SEPS {
         // A word shape only applies to GENUINE multi-word input: at least one
@@ -1214,9 +1678,10 @@ fn verify_str_int(code: &str, examples: &[(String, i64)]) -> bool {
     crate::runtime::code_reproduces_examples(code, &bench)
 }
 
-/// Synthesize a `string -> int` aggregation (char count / word count) from single
-/// string-arg examples. Returns a SELF-VERIFIED Mog program or None. Never-wrong: a
-/// candidate is only returned if it reproduces every example via the interpreter.
+/// Synthesize a `string -> int` aggregation (char count / word count / …) from
+/// single string-arg examples. Returns a SELF-VERIFIED Mog program or None.
+/// Never-wrong: a candidate is only returned if it reproduces every example via
+/// the interpreter.
 pub fn synthesize_string_int_program(
     params: &[String],
     examples: &[(String, i64)],
@@ -1237,14 +1702,163 @@ pub fn synthesize_string_int_program(
             });
         }
     }
-    // Word count: s.split(sep).len. Require some example to actually split into >1
-    // segment (else it's the constant 1 or coincides with something trivial).
+    // Digit count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_digit()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Uppercase letter count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_uppercase()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"A\" {{\n\
+            if c <= \"Z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-upper_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Lowercase letter count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_lowercase()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-lower_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Vowel count (aeiouAEIOU).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c == \"a\" {{\n\
+            n = n + 1;\n\
+        }} else {{\n\
+            if c == \"e\" {{\n\
+                n = n + 1;\n\
+            }} else {{\n\
+                if c == \"i\" {{\n\
+                    n = n + 1;\n\
+                }} else {{\n\
+                    if c == \"o\" {{\n\
+                        n = n + 1;\n\
+                    }} else {{\n\
+                        if c == \"u\" {{\n\
+                            n = n + 1;\n\
+                        }}\n\
+                    }}\n\
+                }}\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-vowel_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Word count: nonempty segments after split. Prefer trim-aware counting so
+    // `"  two words  "` → 2 (naive `.split(" ").count()` would be 4).
     for sep in [" ", "-", "_", ",", "/"] {
-        let matches = examples.iter().all(|(s, o)| s.split(sep).count() as i64 == *o);
-        let nontrivial = examples.iter().any(|(s, _)| s.split(sep).count() >= 2);
+        let matches = examples
+            .iter()
+            .all(|(s, o)| nonempty_split_count(s, sep) == *o);
+        let nontrivial = examples
+            .iter()
+            .any(|(s, _)| nonempty_split_count(s, sep) >= 2);
         if matches && nontrivial {
             let code = format!(
-                "fn transform({p}: string) -> i64 {{\n    return {p}.split(\"{}\").len;\n}}\n",
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    n: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            n = n + 1;\n\
+        }}\n\
+    }}\n\
+    return n;\n\
+}}\n",
                 esc(sep)
             );
             if verify_str_int(&code, examples) {
@@ -1257,7 +1871,544 @@ pub fn synthesize_string_int_program(
             }
         }
     }
+    // Sum of digit character values (e.g. "a12" → 1+2=3).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| c.is_ascii_digit())
+            .map(|c| (c as u8 - b'0') as i64)
+            .sum::<i64>()
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                total = total + (c.ord() - \"0\".ord());\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_sum".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Product of digit character values (e.g. "a23" → 2*3=6; no digits → 1).
+    if examples.iter().all(|(s, o)| {
+        let digits: Vec<i64> = s
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .map(|c| (c as u8 - b'0') as i64)
+            .collect();
+        let prod = if digits.is_empty() {
+            1
+        } else {
+            digits.iter().product()
+        };
+        prod == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    total: i64 = 1;\n\
+    found: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                total = total * (c.ord() - \"0\".ord());\n\
+                found = 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    if found == 0 {{\n\
+        return 1;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-digit_product".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Alphabetic char count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_alphabetic()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-alpha_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Space count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == ' ').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \" \" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-space_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Punctuation count (ASCII punctuation).
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_punctuation()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        o: i64 = c.ord();\n\
+        hit: i64 = 0;\n\
+        if o >= 33 {{\n\
+            if o <= 47 {{ hit = 1; }}\n\
+        }}\n\
+        if o >= 58 {{\n\
+            if o <= 64 {{ hit = 1; }}\n\
+        }}\n\
+        if o >= 91 {{\n\
+            if o <= 96 {{ hit = 1; }}\n\
+        }}\n\
+        if o >= 123 {{\n\
+            if o <= 126 {{ hit = 1; }}\n\
+        }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-punctuation_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Tab count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\t').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\t\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-tab_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Newline count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\n').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\n\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-newline_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Hex digit count (0-9a-fA-F).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        hit: i64 = 0;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{ hit = 1; }}\n\
+        }}\n\
+        if c >= \"a\" {{\n\
+            if c <= \"f\" {{ hit = 1; }}\n\
+        }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-hex_digit_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Whitespace count (ASCII whitespace).
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_whitespace()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        hit: i64 = 0;\n\
+        if c == \" \" {{ hit = 1; }}\n\
+        if c == \"\\t\" {{ hit = 1; }}\n\
+        if c == \"\\n\" {{ hit = 1; }}\n\
+        if c == \"\\r\" {{ hit = 1; }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-whitespace_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Alphanumeric char count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_alphanumeric()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        hit: i64 = 0;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{ hit = 1; }}\n\
+        }}\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{ hit = 1; }}\n\
+        }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-alnum_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Non-alphanumeric char count.
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| !c.is_ascii_alphanumeric())
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        hit: i64 = 1;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{ hit = 0; }}\n\
+        }}\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{ hit = 0; }}\n\
+        }}\n\
+        if hit == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-non_alnum_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Consonant count (ascii letters that are not vowels).
+    if examples.iter().all(|(s, o)| {
+        s.chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .filter(|c| !matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
+            .count() as i64
+            == *o
+    }) {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        is_letter: i64 = 0;\n\
+        if c >= \"a\" {{\n\
+            if c <= \"z\" {{\n\
+                is_letter = 1;\n\
+            }}\n\
+        }}\n\
+        if is_letter == 1 {{\n\
+            is_vowel: i64 = 0;\n\
+            if c == \"a\" {{ is_vowel = 1; }}\n\
+            if c == \"e\" {{ is_vowel = 1; }}\n\
+            if c == \"i\" {{ is_vowel = 1; }}\n\
+            if c == \"o\" {{ is_vowel = 1; }}\n\
+            if c == \"u\" {{ is_vowel = 1; }}\n\
+            if is_vowel == 0 {{\n\
+                n = n + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-consonant_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Longest / shortest word length (nonempty words).
+    for sep in [" ", "-", "_", ",", "/"] {
+        let nontrivial = examples
+            .iter()
+            .any(|(s, _)| nonempty_split_count(s, sep) >= 2);
+        if !nontrivial {
+            continue;
+        }
+        let longest_ok = examples.iter().all(|(s, o)| {
+            let lens: Vec<i64> = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .collect();
+            lens.iter().copied().max().unwrap_or(0) == *o
+        });
+        if longest_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    best: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            if w.len > best {{\n\
+                best = w.len;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-longest_word_len".to_string(),
+                    error: None,
+                });
+            }
+        }
+        let shortest_ok = examples.iter().all(|(s, o)| {
+            let lens: Vec<i64> = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .collect();
+            lens.iter().copied().min().unwrap_or(0) == *o
+        });
+        if shortest_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            if found == 0 {{\n\
+                best = w.len;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if w.len < best {{\n\
+                    best = w.len;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-shortest_word_len".to_string(),
+                    error: None,
+                });
+            }
+        }
+        let sum_ok = examples.iter().all(|(s, o)| {
+            let total: i64 = s
+                .split(sep)
+                .filter(|w| !w.is_empty())
+                .map(|w| w.chars().count() as i64)
+                .sum();
+            total == *o
+        });
+        if sum_ok {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n\
+    parts: [string] = {p}.split(\"{}\");\n\
+    total: i64 = 0;\n\
+    for w in parts {{\n\
+        if w.len > 0 {{\n\
+            total = total + w.len;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-sum_word_lens".to_string(),
+                    error: None,
+                });
+            }
+        }
+    }
     None
+}
+
+/// Count nonempty segments after splitting `s` on `sep` (trim-aware word count).
+fn nonempty_split_count(s: &str, sep: &str) -> i64 {
+    s.split(sep).filter(|p| !p.is_empty()).count() as i64
 }
 
 #[cfg(test)]
@@ -1345,6 +2496,43 @@ mod tests {
             &[wex("hello world", "hw"), wex("the quick brown", "tqb"), wex("a b c", "abc")],
         );
         assert_eq!(r.map(|r| r.method), Some("word-initials".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_filter_even_len() {
+        let p = vec!["s".to_string()];
+        // even-char words only: "aa"(2) "cc"(2); "bb"(2) "dd"(2)
+        let r = synthesize_word_program(
+            &p,
+            &[
+                wex("aa bbb cc d", "aa cc"),
+                wex("a bb ccc dd", "bb dd"),
+            ],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-filter_even_len".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_filter_odd_len() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[
+                wex("aa bbb cc d", "bbb d"),
+                wex("a bb ccc dd", "a ccc"),
+            ],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-filter_odd_len".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_upper_each_word() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[wex("hello world", "HELLO WORLD"), wex("a Bb", "A BB")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-upper_each_word".to_string()));
     }
 
     /// Reachability probe: is longest-word solved by THIS synthesizer, or shadowed
@@ -1646,6 +2834,14 @@ mod tests {
             &[("hello world".into(), 2), ("one two three".into(), 3), ("a".into(), 1)],
         );
         assert_eq!(r.map(|r| r.method), Some("str-word_count".to_string()));
+    }
+
+    #[test]
+    fn nonempty_split_count_skips_padding() {
+        assert_eq!(nonempty_split_count("  two words  ", " "), 2);
+        assert_eq!(nonempty_split_count("hello world", " "), 2);
+        assert_eq!(nonempty_split_count("a--b--c", "-"), 3);
+        assert_eq!(nonempty_split_count("single", " "), 1);
     }
 
     #[test]

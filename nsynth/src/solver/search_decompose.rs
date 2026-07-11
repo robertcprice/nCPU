@@ -39,6 +39,18 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
     if IN_DECOMPOSE.with(|f| f.get()) {
         return None;
     }
+    // WP6 wire: mined templates (NSYNTH_MINED_TEMPLATES) join the hypothesis list
+    // before hand schemas. Const holes filled from example-mined candidates;
+    // acceptance is examples + holdouts + `verify_problem_code_strict` (never-wrong).
+    if let Some(code) = try_mined_template_hypothesis(problem) {
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: "decompose-mined-template".into(),
+            error: None,
+            metadata: Default::default(),
+        });
+    }
     let examples = &problem.examples;
     let first = examples.first()?;
     // (list, int-scalar) inputs route to the two-arg schemas: the scalar is a
@@ -1668,6 +1680,18 @@ fn try_select(problem: &Problem, name: &str) -> Option<(String, String)> {
         "fn {name}(xs: {elem_ty}) -> {inner} {{\n    for x in xs {{\n        if pred(x) {{\n            return x;\n        }}\n    }}\n    return xs[0];\n}}\n\n{pred_fn}"
     );
     Some((code, "decompose-select".to_string()))
+}
+
+// ───────────────────── mined-template hypothesis (WP6) ─────────────────────
+
+/// Load `NSYNTH_MINED_TEMPLATES` (JSON array of [`crate::schema_miner::MinedTemplate`])
+/// and try to instantiate against `problem`. Fast no-op when unset / empty.
+fn try_mined_template_hypothesis(problem: &Problem) -> Option<String> {
+    let templates = crate::schema_miner::load_templates_from_env()?;
+    if templates.is_empty() {
+        return None;
+    }
+    crate::schema_miner::try_instantiate_templates(problem, &templates, 32)
 }
 
 // ───────────────────── element-level sub-solve ─────────────────────

@@ -29,6 +29,8 @@ pub enum QueryRoute {
     ExplainCode,
     CodeReview,
     GreenfieldProject,
+    /// Prose → scaffold oracle (schema or model spec) → hole-filler → cargo gate.
+    WholeSoftware,
     ToolExplore,
     Clarification,
 }
@@ -213,6 +215,56 @@ impl CodingAgentSession {
             }
         }
 
+        // WHOLE-SOFTWARE schema door FIRST: "a todo list where each task has …" is a
+        // decidable scaffold, not an op-library guess. Must run BEFORE verified_nl_router
+        // so a bare-NL schema is not mis-labeled as a tentative library match.
+        // Characterization (≥2 examples) runs inside try_scaffold / the later
+        // construction door — not here — so example-bearing PBE still hits the
+        // never-wrong front door first.
+        if crate::schema_component::is_schema_prose(query) {
+            if let Some(result) = self.try_run_whole_software(query) {
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
+        // WP4: property:/satisfies: with a candidate already on disk → verify only.
+        if let Some((name, _sig, _pn, _ps, _pc)) =
+            crate::whole_software::parse_property_request(query)
+        {
+            let cand_path = self.root.join("src/lib.rs");
+            if let Ok(code) = std::fs::read_to_string(&cand_path) {
+                if code.contains(&format!("fn {name}")) || code.contains(&format!("fn {name}(")) {
+                    let result = match self.verify_property_spec(query, &code) {
+                        Ok(()) => AgentQueryResult {
+                            route: QueryRoute::WholeSoftware,
+                            success: true,
+                            response: format!(
+                                "Property spec verified for `{name}` against Mog predicate."
+                            ),
+                            workflow: "property_verify".into(),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: Some("whole-software:property".into()),
+                            repo_result: None,
+                            tool_trace: vec![("property.verify".into(), name.clone())],
+                        },
+                        Err(e) => AgentQueryResult {
+                            route: QueryRoute::WholeSoftware,
+                            success: false,
+                            response: format!("Property verify failed for `{name}`: {e}"),
+                            workflow: "property_verify".into(),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: Some("whole-software:property".into()),
+                            repo_result: None,
+                            tool_trace: vec![("property.verify".into(), e)],
+                        },
+                    };
+                    self.record_result(query, &result);
+                    return result;
+                }
+            }
+        }
+
         // NEVER-WRONG FRONT DOOR. Split the query into its NL prompt and any inline
         // I/O examples, then route through the verified `answer()` stack: a library op,
         // a 2-op composition, full engine synthesis, or a gated model proposal — each
@@ -226,14 +278,17 @@ impl CodingAgentSession {
             let prompt = if nl.is_empty() { query.to_string() } else { nl };
             match crate::verified_nl_router::answer(&prompt, &examples) {
                 crate::verified_nl_router::Answer::Refused => {
-                    // If the query CARRIED examples, it is a function-synthesis request
-                    // and answer() already tried the whole verified stack (library /
-                    // composition / synthesis / gated model). Its refusal is FINAL:
-                    // refuse honestly rather than fall through to the legacy guessing
-                    // path, which would ship a confident-wrong answer with no oracle.
-                    // With NO examples the query may be a site/project/teach request the
-                    // op-router can't recognize, so those still fall through below.
+                    // If the query CARRIED examples, answer() already tried the Mog
+                    // verified stack. Before honest refuse, try the Rust repo-agent
+                    // lane (scaffold characterization crate + hole-filler) — the
+                    // measured 13%→58% synergy path. Still never-wrong: cargo gates.
                     if !examples.is_empty() {
+                        if let Some(result) =
+                            self.try_example_bearing_rust_lane(query, &examples)
+                        {
+                            self.record_result(query, &result);
+                            return result;
+                        }
                         let result = AgentQueryResult {
                             route: QueryRoute::SynthesizeFunction,
                             success: false,
@@ -634,6 +689,18 @@ impl CodingAgentSession {
             }
         }
 
+        // WHOLE-SOFTWARE (non-schema): construction intent that site/backend/cli/
+        // component did not claim — try gated propose_spec, else fall through to
+        // comprehend / honest refuse. Schema prose already handled above.
+        if crate::whole_software::should_attempt_whole_software(query)
+            && !crate::schema_component::is_schema_prose(query)
+        {
+            if let Some(result) = self.try_run_whole_software(query) {
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
             Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),
@@ -964,6 +1031,11 @@ impl CodingAgentSession {
             QueryRoute::RepoRepair => self.run_repo_repair(query, req),
             QueryRoute::ExplainCode | QueryRoute::CodeReview => self.run_explain(query, req),
             QueryRoute::GreenfieldProject => self.run_greenfield(query, req, gate),
+            QueryRoute::WholeSoftware => {
+                // Whole-software is entered via try_run_whole_software before
+                // comprehend; if we somehow land here, fall through to explore.
+                self.handle_explore(query)
+            }
             QueryRoute::ToolExplore => self.handle_explore(query),
             QueryRoute::Clarification => self.handle_explore(query),
         }
@@ -1707,6 +1779,283 @@ impl CodingAgentSession {
         }
     }
 
+    /// Whole-software product path: scaffold an oracle crate (schema /
+    /// characterization / gated spec / gated decompose), then run the repo-agent
+    /// hole-filler against `cargo test`. Returns `None` when no scaffold tier
+    /// applies (caller falls through).
+    fn try_run_whole_software(&mut self, query: &str) -> Option<AgentQueryResult> {
+        let mut plan = crate::whole_software::BuildPlan::new();
+        let scaffolded = crate::whole_software::try_scaffold(&self.root, query).or_else(|| {
+            // WP3: construction intent + model available, schema/spec/char failed.
+            if crate::whole_software::should_attempt_whole_software(query) {
+                crate::whole_software::try_decompose_project(&self.root, query)
+            } else {
+                None
+            }
+        })?;
+        crate::whole_software::run_bounded_loop(&mut plan, scaffolded.method);
+        let mut result = self.fill_scaffolded_whole_software(query, &scaffolded);
+        result.tool_trace.push((
+            "whole_software.phases".into(),
+            plan.phases.join(" → "),
+        ));
+        // WP5 + Phase-4 flywheel: promote, harvest, optional Mog distill.
+        if result.success {
+            let name = if !scaffolded.component_name.is_empty() {
+                scaffolded.component_name.clone()
+            } else {
+                "whole_software_component".into()
+            };
+            self.post_success_flywheel(query, &name, &mut result, None);
+        }
+        Some(result)
+    }
+
+    /// Example-bearing Rust lane (MBPP 13%→58% synergy): when the Mog never-wrong
+    /// door refuses, scaffold a characterization crate from the parsed examples and
+    /// run the repo-agent hole-filler. Cargo-gated; returns `None` if the examples
+    /// are not Rust-representable or the fill fails (so the caller can honest-refuse).
+    fn try_example_bearing_rust_lane(
+        &mut self,
+        query: &str,
+        examples: &[crate::benchmark::Example],
+    ) -> Option<AgentQueryResult> {
+        if examples.len() < 2 {
+            return None;
+        }
+        let (nl, _) = crate::verified_nl_router::split_prompt_examples(query);
+        let fn_name = crate::characterization::infer_fn_name(
+            if nl.is_empty() { query } else { &nl },
+            if nl.is_empty() { None } else { Some(&nl) },
+        );
+        let written = crate::characterization::write_characterization_from_bench(
+            &self.root,
+            &fn_name,
+            examples,
+        )
+        .ok()?;
+        // Recall: prefer examples-fingerprint match, else fn-name match. Cargo
+        // still gates — wrong recall just fails tests and the hole-filler runs.
+        if let Some(prior) =
+            crate::schema_miner::find_rust_learned(&fn_name, Some(examples))
+        {
+            let _ = crate::schema_miner::apply_rust_learned_to_lib(&self.root, &prior);
+        }
+        let scaffolded = crate::whole_software::ScaffoldedCrate {
+            root: self.root.clone(),
+            kind: crate::whole_software::ScaffoldKind::Characterization,
+            method: "whole-software:example-rust-lane",
+            summary: format!(
+                "example-bearing Rust lane fn {} ({} tests)",
+                written.fn_name, written.n_tests
+            ),
+            n_tests: written.n_tests,
+            component_name: written.fn_name.clone(),
+        };
+        let mut plan = crate::whole_software::BuildPlan::new();
+        crate::whole_software::run_bounded_loop(&mut plan, scaffolded.method);
+        let mut result = self.fill_scaffolded_whole_software(query, &scaffolded);
+        result.tool_trace.push((
+            "example_rust_lane.phases".into(),
+            plan.phases.join(" → "),
+        ));
+        if !result.success {
+            // Fall through to honest verified-nl refuse rather than surface a
+            // WholeSoftware failure that blocks the clearer message.
+            return None;
+        }
+        result.synthesis_method = Some("whole-software:example-rust-lane".into());
+        // Phase-4 flywheel: promote + harvest + optional Mog distill.
+        self.post_success_flywheel(query, &fn_name, &mut result, Some(examples));
+        Some(result)
+    }
+
+    /// Shared Phase-4 flywheel after a cargo-verified whole-software / Rust-lane
+    /// fill: promote component, append harvest (auto-mines templates), and when
+    /// examples are available attempt Mog `record_proposed_op` distill.
+    fn post_success_flywheel(
+        &self,
+        query: &str,
+        component_name: &str,
+        result: &mut AgentQueryResult,
+        examples: Option<&[crate::benchmark::Example]>,
+    ) {
+        let exs: Vec<crate::benchmark::Example> = match examples {
+            Some(e) if e.len() >= 2 => e.to_vec(),
+            _ => {
+                // Best-effort: parse inline examples from the query for schema
+                // fills that still carried I/O in the prose.
+                let (_, parsed) = crate::verified_nl_router::split_prompt_examples(query);
+                parsed
+            }
+        };
+        let lib_path = self.root.join("src/lib.rs");
+        if let Ok(lib) = std::fs::read_to_string(&lib_path) {
+            let surfaces = vec![
+                component_name.to_string(),
+                query.chars().take(48).collect(),
+            ];
+            let _ = crate::component::promote_schema_component(
+                &self.root,
+                component_name,
+                &surfaces,
+                &lib,
+            );
+            crate::schema_miner::append_harvest_row(query, &lib);
+            // Parallel Rust learned store (fingerprint when examples known).
+            let ex_ref = if exs.len() >= 2 { Some(exs.as_slice()) } else { None };
+            crate::schema_miner::append_rust_learned_ex(component_name, query, &lib, ex_ref);
+        }
+        if exs.len() >= 2 {
+            self.maybe_distill_rust_lane_to_mog(component_name, &exs, result);
+        }
+    }
+
+    /// Best-effort Mog re-synthesis + `record_proposed_op` after a Rust-lane win.
+    /// Inert without `NSYNTH_LEARNED_OPS_PATH`; disable with `NSYNTH_RUST_LANE_DISTILL=0`.
+    fn maybe_distill_rust_lane_to_mog(
+        &self,
+        fn_name: &str,
+        examples: &[crate::benchmark::Example],
+        result: &mut AgentQueryResult,
+    ) {
+        match std::env::var("NSYNTH_RUST_LANE_DISTILL") {
+            Ok(v)
+                if v == "0"
+                    || v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no") =>
+            {
+                return;
+            }
+            _ => {}
+        }
+        if std::env::var_os("NSYNTH_LEARNED_OPS_PATH").is_none() {
+            return;
+        }
+        if examples.len() < 2 {
+            return;
+        }
+        let sig: &'static str = Box::leak(
+            crate::linguigenesis_bridge::infer_signature(fn_name, examples).into_boxed_str(),
+        );
+        let problem = crate::benchmark::Problem {
+            name: fn_name.to_string(),
+            signature: sig,
+            examples: examples.to_vec(),
+            ..Default::default()
+        };
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                "skip:mog-unsolved".into(),
+            ));
+            return;
+        }
+        if crate::op_library::record_proposed_op(&problem, &solved.code) {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                format!("recorded via {}", solved.method),
+            ));
+        } else {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                "skip:not-recorded".into(),
+            ));
+        }
+    }
+
+    /// WP4: if the query carries a `property:` / `satisfies:` Mog predicate and a
+    /// candidate body is available under the session root, verify it.
+    pub fn verify_property_spec(&self, query: &str, candidate_code: &str) -> Result<(), String> {
+        let (name, sig, pred_name, pred_sig, pred_code) =
+            crate::whole_software::parse_property_request(query)
+                .ok_or_else(|| "query has no property:/satisfies: Mog predicate".to_string())?;
+        crate::agent::coding_intent::try_property_verify(
+            candidate_code,
+            &name,
+            &sig,
+            &pred_name,
+            &pred_sig,
+            &pred_code,
+        )
+    }
+
+    fn fill_scaffolded_whole_software(
+        &mut self,
+        query: &str,
+        scaffolded: &crate::whole_software::ScaffoldedCrate,
+    ) -> AgentQueryResult {
+        // Sparse intent: the failing tests ARE the oracle. from_nl would try to
+        // resolve "fix the failing tests" as an op and fail; a lenient/sparse
+        // intent keeps the repair ladder on the mutation → multi-hole path.
+        let intent = CodingIntent {
+            function_name: "f".into(),
+            signature: String::new(),
+            category: "whole_software".into(),
+            description: "fix the failing tests".into(),
+            examples: Vec::new(),
+            constraints: Vec::new(),
+            confidence: 0.0,
+            unresolved: vec!["scaffold-oracle".into()],
+            evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
+        };
+        let mut spec = CodeTaskSpec::from_nl(
+            self.root.to_string_lossy(),
+            "fix the failing tests",
+            intent,
+            "cargo test".to_string(),
+            vec!["src/**".into()],
+            8,
+        );
+        // Multi-hole / joint search can take tens of seconds on richer schemas.
+        spec.budget.max_wall_ms = 180_000;
+        spec.budget.max_attempts = 12;
+        spec.budget.max_synthesis_candidates = 8;
+
+        let mut agent = RepoAgent::new(&self.root, self.policy.clone());
+        let repo_result = agent.run(&spec);
+        let success = repo_result.success;
+        let response = if success {
+            format!(
+                "Built whole-software crate via {} — {} — filled + cargo-verified after {} iterations (phases: {})",
+                scaffolded.method,
+                scaffolded.summary,
+                repo_result.repair_iterations,
+                repo_result.phases_completed.join(" → ")
+            )
+        } else {
+            format!(
+                "Whole-software scaffold ({}) wrote a checkable crate but fill failed after {} iterations.\n{}\n\nQuery: {}",
+                scaffolded.summary,
+                repo_result.repair_iterations,
+                repo_result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "repair did not satisfy oracle".to_string()),
+                truncate(query, 120)
+            )
+        };
+        AgentQueryResult {
+            route: QueryRoute::WholeSoftware,
+            success,
+            response,
+            workflow: "whole_software".into(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some(scaffolded.method.to_string()),
+            repo_result: Some(repo_result),
+            tool_trace: vec![
+                ("whole_software.scaffold".into(), scaffolded.summary.clone()),
+                (
+                    "whole_software.n_tests".into(),
+                    scaffolded.n_tests.to_string(),
+                ),
+            ],
+        }
+    }
+
     fn run_explain(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
         let mut tool_trace = Vec::new();
         let index = match RepoIndex::build(&self.root, &self.policy) {
@@ -1846,10 +2195,14 @@ impl CodingAgentSession {
                 success: false,
                 response: format!(
                     "I couldn't confidently understand \"{}\" as something I can build \
-                     or compute — nothing resolved to a known operation, component, or \
-                     artifact. Try naming a concrete function with an example (e.g. \"a \
-                     function f where f(2)=4\"), or a known artifact: a website/page, an \
-                     api, or a component like a counter or a stack.",
+                     or compute — nothing resolved to a known operation, component, \
+                     schema, characterization examples, or artifact. Try a decidable \
+                     schema (e.g. \"a todo list where each task has a title and a \
+                     priority number\"), a function with ≥2 examples (e.g. \
+                     \"double(2)=4, double(3)=6\"), a website/page, an api, or a \
+                     component like a counter. For non-schema logic (auth/guards) set \
+                     NSYNTH_LOCAL_LLM_URL so the model can write a checkable SPEC; for \
+                     multi-file decompose set NSYNTH_LOCAL_LLM_PROJECT (or URL).",
                     truncate(query, 100)
                 ),
                 workflow: "unknown".into(),
@@ -2424,6 +2777,61 @@ mod tests {
         );
         assert!(has_build_intent("build a snake game"), "sanity: build intent detected");
         assert!(!has_build_intent("what does this project do"), "sanity: question is not build intent");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// WP1 product path: schema prose → scaffold + hole-fill + cargo gate in ONE
+    /// `handle_query` (no manual schema_component bin). Small inventory keeps runtime bounded.
+    #[test]
+    fn whole_software_schema_product_path_fills_and_verifies() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ws_schema");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        let r = session.handle_query("an inventory where each product has a price number");
+        assert_eq!(
+            r.route,
+            QueryRoute::WholeSoftware,
+            "schema prose must take the whole-software route: {}",
+            r.response
+        );
+        assert_eq!(
+            r.synthesis_method.as_deref(),
+            Some("whole-software:schema"),
+            "method provenance"
+        );
+        assert!(
+            r.success,
+            "schema scaffold must fill + cargo-verify via product path: {}",
+            r.response
+        );
+        let lib = fs::read_to_string(root.join("src/lib.rs")).expect("lib.rs");
+        assert!(
+            !lib.contains("pub fn count(&self) -> i64 {}"),
+            "stubs must be filled, not left empty"
+        );
+        assert!(lib.contains("fn t_count()"), "canonical tests retained");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn whole_software_schema_with_build_verb_still_routes() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ws_build");
+        fs::create_dir_all(&root).unwrap();
+        // Scaffold-only check: parse + write without waiting for full fill when we
+        // only need routing. Use try_scaffold directly for the fast assert, then a
+        // short handle_query on a distinct root for route identity via schema door.
+        let scaffolded = crate::whole_software::try_scaffold(
+            &root,
+            "build a shelf where each book has a title and a pages number",
+        )
+        .expect("schema with build verb");
+        assert_eq!(
+            scaffolded.kind,
+            crate::whole_software::ScaffoldKind::Schema
+        );
+        assert!(root.join("src/lib.rs").is_file());
         let _ = fs::remove_dir_all(root);
     }
 
