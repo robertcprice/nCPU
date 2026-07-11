@@ -843,6 +843,7 @@ enum WordShape {
     /// Join words with CR regardless of input sep.
     JoinWithCR,
     JoinWithQuestion,
+    JoinWithExclamation,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -933,6 +934,7 @@ impl WordShape {
             WordShape::JoinWithNewline => "join_with_newline",
             WordShape::JoinWithCR => "join_with_cr",
             WordShape::JoinWithQuestion => "join_with_question",
+            WordShape::JoinWithExclamation => "join_with_exclamation",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1341,6 +1343,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithNewline => words.join("\n"),
         WordShape::JoinWithCR => words.join("\r"),
         WordShape::JoinWithQuestion => words.join("?"),
+        WordShape::JoinWithExclamation => words.join("!"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1603,6 +1606,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithQuestion => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"?\");\n}}\n"
         ),
+        WordShape::JoinWithExclamation => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"!\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1633,7 +1639,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 83] = [
+    const SHAPES: [WordShape; 84] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1715,6 +1721,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithNewline,
         WordShape::JoinWithCR,
         WordShape::JoinWithQuestion,
+        WordShape::JoinWithExclamation,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -3811,6 +3818,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-enq_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // ACK count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x06').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x06\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-ack_count".to_string(),
                 error: None,
             });
         }

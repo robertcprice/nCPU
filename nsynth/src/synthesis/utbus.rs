@@ -929,6 +929,10 @@ enum DualAccum {
     ProductCubesEvens,
     /// Product of cubes of odd-valued elements (empty → 1).
     ProductCubesOdds,
+    /// Sum of |x|^3 for even-valued elements (empty → 0).
+    SumAbsCubesEvens,
+    /// Sum of |x|^3 for odd-valued elements (empty → 0).
+    SumAbsCubesOdds,
 }
 
 impl DualAccum {
@@ -1046,6 +1050,8 @@ impl DualAccum {
             DualAccum::LcmAbsOdds => "lcm_abs_odds",
             DualAccum::ProductCubesEvens => "product_cubes_evens",
             DualAccum::ProductCubesOdds => "product_cubes_odds",
+            DualAccum::SumAbsCubesEvens => "sum_abs_cubes_evens",
+            DualAccum::SumAbsCubesOdds => "sum_abs_cubes_odds",
         }
     }
 
@@ -1108,6 +1114,8 @@ impl DualAccum {
                 | DualAccum::SumSquaresOdds
                 | DualAccum::SumCubesEvens
                 | DualAccum::SumCubesOdds
+                | DualAccum::SumAbsCubesEvens
+                | DualAccum::SumAbsCubesOdds
                 | DualAccum::SumSquares
                 | DualAccum::AbsSum
                 | DualAccum::MaxAbs
@@ -1925,6 +1933,24 @@ impl DualAccum {
                     .filter(|&&x| x % 2 != 0)
                     .map(|&x| x.saturating_mul(x).saturating_mul(x))
                     .fold(1i64, i64::saturating_mul),
+            ),
+            DualAccum::SumAbsCubesEvens => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0)
+                    .map(|&x| {
+                        let a = x.abs();
+                        a.saturating_mul(a).saturating_mul(a)
+                    })
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumAbsCubesOdds => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0)
+                    .map(|&x| {
+                        let a = x.abs();
+                        a.saturating_mul(a).saturating_mul(a)
+                    })
+                    .fold(0i64, i64::saturating_add),
             ),
         }
     }
@@ -3377,6 +3403,32 @@ DualAccum::SumSquaresOdds => format!(
     return total;\n\
 }}\n"
             ),
+            DualAccum::SumAbsCubesEvens => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + (a * a * a);\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumAbsCubesOdds => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            a: i64 = item;\n\
+            if a < 0 {{ a = 0 - a; }}\n\
+            total = total + (a * a * a);\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
 
 
         }
@@ -4447,6 +4499,8 @@ fn try_dual_and_pairwise(
         DualAccum::LcmAbsOdds,
         DualAccum::ProductCubesEvens,
         DualAccum::ProductCubesOdds,
+        DualAccum::SumAbsCubesEvens,
+        DualAccum::SumAbsCubesOdds,
     ] {
         let ok = inputs
             .iter()
@@ -6900,6 +6954,8 @@ enum KClosed {
     SumWhereAbsGeK,
     /// Product of elements with |v| >= k (empty filter → 1).
     ProductWhereAbsGeK,
+    /// Product of elements with |v| <= k (empty filter → 1).
+    ProductWhereAbsLeK,
 }
 
 impl KClosed {
@@ -6978,6 +7034,7 @@ impl KClosed {
             KClosed::MinWhereAbsGeK => "min_where_abs_ge_k",
             KClosed::SumWhereAbsGeK => "sum_where_abs_ge_k",
             KClosed::ProductWhereAbsGeK => "product_where_abs_ge_k",
+            KClosed::ProductWhereAbsLeK => "product_where_abs_le_k",
         }
     }
 
@@ -7529,6 +7586,12 @@ impl KClosed {
             KClosed::ProductWhereAbsGeK => Some(
                 arr.iter()
                     .filter(|&&v| v.abs() >= k)
+                    .copied()
+                    .fold(1i64, i64::saturating_mul),
+            ),
+            KClosed::ProductWhereAbsLeK => Some(
+                arr.iter()
+                    .filter(|&&v| v.abs() <= k)
                     .copied()
                     .fold(1i64, i64::saturating_mul),
             ),
@@ -8540,6 +8603,19 @@ KClosed::MinWhereAbsNeK => format!(
     return total;\n\
 }}\n"
             ),
+            KClosed::ProductWhereAbsLeK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    total: i64 = 1;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a <= k {{\n\
+            total = total * item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -8625,6 +8701,7 @@ fn try_k_closed(
         KClosed::MinWhereAbsGeK,
         KClosed::SumWhereAbsGeK,
         KClosed::ProductWhereAbsGeK,
+        KClosed::ProductWhereAbsLeK,
     ] {
         let ok = inputs
             .iter()
@@ -9853,5 +9930,8 @@ mod tests {
         assert_eq!(DualAccum::ProductCubesEvens.eval(&[-2, 3, 2]), Some(-64));
         assert_eq!(DualAccum::ProductCubesOdds.eval(&[-2, 3, 1]), Some(27));
         assert_eq!(KClosed::ProductWhereAbsGeK.eval(&[-5, 2, 4], 4), Some(-20));
+        assert_eq!(DualAccum::SumAbsCubesEvens.eval(&[-2, 3, 2]), Some(16));
+        assert_eq!(DualAccum::SumAbsCubesOdds.eval(&[-2, 3, 1]), Some(28));
+        assert_eq!(KClosed::ProductWhereAbsLeK.eval(&[-5, 2, 4], 4), Some(8));
     }
 }
