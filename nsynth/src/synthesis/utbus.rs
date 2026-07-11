@@ -865,6 +865,8 @@ enum DualAccum {
     ProductAbsOdds,
     /// XOR of absolute values (empty → 0).
     XorAbsAll,
+    /// Bitwise AND of absolute values (empty → -1).
+    AndAbsAll,
 }
 
 impl DualAccum {
@@ -950,6 +952,7 @@ impl DualAccum {
             DualAccum::ProductAbsEvens => "product_abs_evens",
             DualAccum::ProductAbsOdds => "product_abs_odds",
             DualAccum::XorAbsAll => "xor_abs_all",
+            DualAccum::AndAbsAll => "and_abs_all",
         }
     }
 
@@ -1018,7 +1021,7 @@ impl DualAccum {
                 | DualAccum::DotIndex
                 | DualAccum::XorAll
                 | DualAccum::OrAll => Some(0),
-                DualAccum::AndAll => Some(-1),
+                DualAccum::AndAll | DualAccum::AndAbsAll => Some(-1),
                 DualAccum::IsPalindrome => Some(1),
                 DualAccum::MeanAbsTrunc
                 | DualAccum::MeanTrunc
@@ -1581,6 +1584,9 @@ impl DualAccum {
             ),
             DualAccum::XorAbsAll => Some(
                 arr.iter().map(|&x| x.abs()).fold(0i64, |a, b| a ^ b),
+            ),
+            DualAccum::AndAbsAll => Some(
+                arr.iter().map(|&x| x.abs()).fold(-1i64, |a, b| a & b),
             ),
         }
     }
@@ -2545,6 +2551,17 @@ DualAccum::MinPositive => format!(
         a: i64 = item;\n\
         if a < 0 {{ a = 0 - a; }}\n\
         total = total ^ a;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::AndAbsAll => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0 - 1;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        total = total & a;\n\
     }}\n\
     return total;\n\
 }}\n"
@@ -3585,6 +3602,7 @@ fn try_dual_and_pairwise(
         DualAccum::ProductAbsEvens,
         DualAccum::ProductAbsOdds,
         DualAccum::XorAbsAll,
+        DualAccum::AndAbsAll,
     ] {
         let ok = inputs
             .iter()
@@ -3737,6 +3755,8 @@ fn try_dual_and_pairwise(
         IndexScan::SumAbsOddValueOddIndices,
         IndexScan::OrAbsEvenIndices,
         IndexScan::OrAbsOddIndices,
+        IndexScan::AndAbsEvenIndices,
+        IndexScan::AndAbsOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -3922,6 +3942,10 @@ enum IndexScan {
     OrAbsEvenIndices,
     /// Bitwise OR of |v| at odd indices (no odd → 0).
     OrAbsOddIndices,
+    /// Bitwise AND of |v| at even indices (empty → -1).
+    AndAbsEvenIndices,
+    /// Bitwise AND of |v| at odd indices (no odd → -1).
+    AndAbsOddIndices,
 }
 
 impl IndexScan {
@@ -4008,6 +4032,8 @@ impl IndexScan {
             IndexScan::SumAbsOddValueOddIndices => "sum_abs_odd_value_odd_indices",
             IndexScan::OrAbsEvenIndices => "or_abs_even_indices",
             IndexScan::OrAbsOddIndices => "or_abs_odd_indices",
+            IndexScan::AndAbsEvenIndices => "and_abs_even_indices",
+            IndexScan::AndAbsOddIndices => "and_abs_odd_indices",
         }
     }
 
@@ -4706,6 +4732,32 @@ impl IndexScan {
                     .map(|(_, &v)| v.abs())
                     .fold(0i64, |a, b| a | b),
             ),
+            IndexScan::AndAbsEvenIndices => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 0)
+                    .map(|(_, &v)| v.abs())
+                    .collect();
+                if vals.is_empty() {
+                    Some(-1)
+                } else {
+                    Some(vals.into_iter().fold(-1i64, |a, b| a & b))
+                }
+            }
+            IndexScan::AndAbsOddIndices => {
+                let vals: Vec<i64> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 1)
+                    .map(|(_, &v)| v.abs())
+                    .collect();
+                if vals.is_empty() {
+                    Some(-1)
+                } else {
+                    Some(vals.into_iter().fold(-1i64, |a, b| a & b))
+                }
+            }
         }
     }
 
@@ -5769,6 +5821,34 @@ impl IndexScan {
         a: i64 = arr[i];\n\
         if a < 0 {{ a = 0 - a; }}\n\
         total = total | a;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::AndAbsEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len == 0 {{ return 0 - 1; }}\n\
+    total: i64 = 0 - 1;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        total = total & a;\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::AndAbsOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    if arr.len < 2 {{ return 0 - 1; }}\n\
+    total: i64 = 0 - 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        a: i64 = arr[i];\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        total = total & a;\n\
         i = i + 2;\n\
     }}\n\
     return total;\n\
@@ -8394,5 +8474,8 @@ mod tests {
         assert_eq!(DualAccum::XorAbsAll.eval(&[-3, 5, 1]), Some(7));
         assert_eq!(IndexScan::OrAbsEvenIndices.eval(&[-1, 2, 4, 8]), Some(5));
         assert_eq!(IndexScan::OrAbsOddIndices.eval(&[-1, 2, 4, 8]), Some(10));
+        assert_eq!(DualAccum::AndAbsAll.eval(&[-7, 3, 5]), Some(1));
+        assert_eq!(IndexScan::AndAbsEvenIndices.eval(&[-7, 2, 3, 8]), Some(3));
+        assert_eq!(IndexScan::AndAbsOddIndices.eval(&[-1, 7, 4, 3]), Some(3));
     }
 }
