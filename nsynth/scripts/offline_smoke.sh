@@ -1241,6 +1241,14 @@ fn index_count_even_value_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v%2==0).count() as i64
 }
 
+fn index_count_odd_value_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==0 && v%2!=0).count() as i64
+}
+
+fn index_count_odd_value_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,&v)| i%2==1 && v%2!=0).count() as i64
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1467,6 +1475,17 @@ fn k_max_abs_lt(arr: &[i64], k: i64) -> i64 {
         let a = v.abs();
         if a < k {
             if !found || a > best { best = a; found = true; }
+        }
+    }
+    best
+}
+
+fn k_min_abs_gt(arr: &[i64], k: i64) -> i64 {
+    let mut best = 0i64; let mut found = false;
+    for &v in arr {
+        let a = v.abs();
+        if a > k {
+            if !found || a < best { best = a; found = true; }
         }
     }
     best
@@ -1745,6 +1764,9 @@ mod tests {
         assert_eq!(index_count_even_value_even(&[2, 9, 3, 8]), 1);
         assert_eq!(index_count_even_value_odd(&[2, 9, 3, 8]), 1);
         assert_eq!(k_max_abs_lt(&[-5, 2, 4], 4), 2);
+        assert_eq!(index_count_odd_value_even(&[2, 9, 3, 8]), 1);
+        assert_eq!(index_count_odd_value_odd(&[2, 9, 3, 8]), 1);
+        assert_eq!(k_min_abs_gt(&[-5, 2, 4], 2), 4);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
@@ -1959,6 +1981,10 @@ fn sort_by_len_desc(s: &str, sep: &str) -> String {
 
 fn fourth_word(s: &str, sep: &str) -> String {
     s.split(sep).nth(3).unwrap_or("").to_string()
+}
+
+fn fifth_word(s: &str, sep: &str) -> String {
+    s.split(sep).nth(4).unwrap_or("").to_string()
 }
 
 fn sort_words_desc(s: &str, sep: &str) -> String {
@@ -2201,6 +2227,10 @@ fn ampersand_count(s: &str) -> i64 {
     s.chars().filter(|c| *c == '&').count() as i64
 }
 
+fn star_count(s: &str) -> i64 {
+    s.chars().filter(|c| *c == '*').count() as i64
+}
+
 
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
@@ -2232,6 +2262,7 @@ mod tests {
         assert_eq!(second_word("alpha beta gamma", " "), "beta");
         assert_eq!(third_word("alpha beta gamma delta", " "), "gamma");
         assert_eq!(fourth_word("alpha beta gamma delta", " "), "delta");
+        assert_eq!(fifth_word("a b c d e f", " "), "e");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
         assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
         assert_eq!(filter_len_gt3("a to the moon", " "), "moon");
@@ -2295,6 +2326,7 @@ mod tests {
         assert_eq!(percent_count("a%b%%c"), 3);
         assert_eq!(dollar_count("a$b$$c"), 3);
         assert_eq!(ampersand_count("a&b&&c"), 3);
+        assert_eq!(star_count("a*b**c"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
