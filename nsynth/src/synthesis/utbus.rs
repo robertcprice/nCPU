@@ -1284,6 +1284,8 @@ enum PairwiseScan {
     LongestIncreasingRun,
     /// Length of the longest strictly-decreasing contiguous run.
     LongestDecreasingRun,
+    /// Count positions where `arr[i] == arr[i-1]`.
+    CountAdjacentEq,
 }
 
 impl PairwiseScan {
@@ -1301,6 +1303,7 @@ impl PairwiseScan {
             PairwiseScan::SumAbsDiff => "sum_abs_diff",
             PairwiseScan::LongestIncreasingRun => "longest_increasing_run",
             PairwiseScan::LongestDecreasingRun => "longest_decreasing_run",
+            PairwiseScan::CountAdjacentEq => "count_adjacent_eq",
         }
     }
 
@@ -1457,6 +1460,15 @@ impl PairwiseScan {
                     }
                 }
                 Some(best)
+            }
+            PairwiseScan::CountAdjacentEq => {
+                let mut count = 0i64;
+                for i in 1..arr.len() {
+                    if arr[i] == arr[i - 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
             }
         }
     }
@@ -1627,6 +1639,19 @@ impl PairwiseScan {
     return best;\n\
 }}\n"
             ),
+            PairwiseScan::CountAdjacentEq => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] == arr[i - 1] {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1693,6 +1718,7 @@ fn try_dual_and_pairwise(
         PairwiseScan::SumAbsDiff,
         PairwiseScan::LongestIncreasingRun,
         PairwiseScan::LongestDecreasingRun,
+        PairwiseScan::CountAdjacentEq,
     ] {
         let ok = inputs
             .iter()

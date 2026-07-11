@@ -465,6 +465,11 @@ fn pairwise_longest_dec_run(arr: &[i64]) -> Option<i64> {
     Some(best)
 }
 
+fn pairwise_count_adj_eq(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    (1..arr.len()).filter(|&i| arr[i] == arr[i - 1]).count() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +633,7 @@ mod tests {
         assert_eq!(pairwise_non_increasing(&[5, 6, 3]), 0);
         assert_eq!(pairwise_longest_inc_run(&[1, 2, 0, 3, 4, 5, 1]), Some(4));
         assert_eq!(pairwise_longest_dec_run(&[5, 4, 3, 0, 2, 1]), Some(4));
+        assert_eq!(pairwise_count_adj_eq(&[1, 1, 2, 2, 2, 3]), 3);
     }
 }
 EOF
