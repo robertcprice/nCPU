@@ -66,8 +66,12 @@ def localize_target(repo, out):
     """The buggy file to repair, inferred from the failure traceback: the DEEPEST (last) non-test
     `.py` frame that lives inside the repo. This is what makes it repo-level (SWE-bench shape) — no
     need to name the file; the failing test points at the code it exercised."""
+    # Match BOTH the Python native traceback (`File "path.py", line N`) and pytest's compact frame
+    # format (`path.py:N: in func`), in order, so the deepest non-test frame wins whichever runner.
+    frames = re.findall(r'File "([^"]+\.py)", line \d+', out)
+    frames += re.findall(r'^\s*([^\s:]+\.py):\d+: in ', out, re.M)
     cand = None
-    for f in re.findall(r'File "([^"]+\.py)"', out):
+    for f in frames:
         base = os.path.basename(f)
         if base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py":
             continue
