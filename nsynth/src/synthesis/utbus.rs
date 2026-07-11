@@ -1221,6 +1221,10 @@ enum DualAccum {
     ProductThirteenthPowersEvenNonZero,
     /// Product of thirteenth powers of odd-valued non-zero elements (none → 1).
     ProductThirteenthPowersOddNonZero,
+    /// Truncating mean of thirteenth powers of even-valued non-zero elements (none → 0).
+    MeanThirteenthPowersEvenNonZeroTrunc,
+    /// Truncating mean of thirteenth powers of odd-valued non-zero elements (none → 0).
+    MeanThirteenthPowersOddNonZeroTrunc,
 }
 
 impl DualAccum {
@@ -1484,6 +1488,8 @@ impl DualAccum {
             DualAccum::SumThirteenthPowersOddNonZero => "sum_thirteenth_powers_odd_non_zero",
             DualAccum::ProductThirteenthPowersEvenNonZero => "product_thirteenth_powers_even_non_zero",
             DualAccum::ProductThirteenthPowersOddNonZero => "product_thirteenth_powers_odd_non_zero",
+            DualAccum::MeanThirteenthPowersEvenNonZeroTrunc => "mean_thirteenth_powers_even_non_zero_trunc",
+            DualAccum::MeanThirteenthPowersOddNonZeroTrunc => "mean_thirteenth_powers_odd_non_zero_trunc",
         }
     }
 
@@ -1603,6 +1609,8 @@ impl DualAccum {
                 | DualAccum::MeanTwelfthPowersOddNonZeroTrunc
                 | DualAccum::SumThirteenthPowersEvenNonZero
                 | DualAccum::SumThirteenthPowersOddNonZero
+                | DualAccum::MeanThirteenthPowersEvenNonZeroTrunc
+                | DualAccum::MeanThirteenthPowersOddNonZeroTrunc
                 | DualAccum::SumPositiveEvens
                 | DualAccum::SumPositiveOdds
                 | DualAccum::SumNegativeEvens
@@ -3866,6 +3874,40 @@ impl DualAccum {
                     })
                     .fold(1i64, i64::saturating_mul),
             ),
+            DualAccum::MeanThirteenthPowersEvenNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 == 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q).saturating_mul(s).saturating_mul(s).saturating_mul(x)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
+            DualAccum::MeanThirteenthPowersOddNonZeroTrunc => {
+                let xs: Vec<i64> = arr
+                    .iter()
+                    .copied()
+                    .filter(|&x| x % 2 != 0 && x != 0)
+                    .map(|x| {
+                        let s = x.saturating_mul(x);
+                        let q = s.saturating_mul(s);
+                        q.saturating_mul(q).saturating_mul(s).saturating_mul(s).saturating_mul(x)
+                    })
+                    .collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
+            }
         }
     }
 
@@ -7661,6 +7703,48 @@ DualAccum::SumSquaresOdds => format!(
 }}
 "
             ),
+            DualAccum::MeanThirteenthPowersEvenNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{
+    total: i64 = 0;
+    n: i64 = 0;
+    for item in arr {{
+        if item % 2 == 0 {{
+            if item != 0 {{
+                sq: i64 = item * item;
+                q: i64 = sq * sq;
+                total = total + q * q * sq * sq * item;
+                n = n + 1;
+            }}
+        }}
+    }}
+    if n == 0 {{
+        return 0;
+    }}
+    return total / n;
+}}
+"
+            ),
+            DualAccum::MeanThirteenthPowersOddNonZeroTrunc => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{
+    total: i64 = 0;
+    n: i64 = 0;
+    for item in arr {{
+        if item % 2 != 0 {{
+            if item != 0 {{
+                sq: i64 = item * item;
+                q: i64 = sq * sq;
+                total = total + q * q * sq * sq * item;
+                n = n + 1;
+            }}
+        }}
+    }}
+    if n == 0 {{
+        return 0;
+    }}
+    return total / n;
+}}
+"
+            ),
 
         }
     }
@@ -8876,6 +8960,8 @@ fn try_dual_and_pairwise(
         DualAccum::SumThirteenthPowersOddNonZero,
         DualAccum::ProductThirteenthPowersEvenNonZero,
         DualAccum::ProductThirteenthPowersOddNonZero,
+        DualAccum::MeanThirteenthPowersEvenNonZeroTrunc,
+        DualAccum::MeanThirteenthPowersOddNonZeroTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -11475,6 +11561,8 @@ enum KClosed {
     FirstNegativeDivisibleByK,
     /// Last negative element divisible by k (none → -1; k == 0 → None).
     LastNegativeDivisibleByK,
+    /// Truncating mean of positive elements divisible by k (none → 0; k == 0 → None).
+    MeanPositiveDivisibleByKTrunc,
 }
 
 impl KClosed {
@@ -11626,6 +11714,7 @@ impl KClosed {
             KClosed::LastPositiveDivisibleByK => "last_positive_divisible_by_k",
             KClosed::FirstNegativeDivisibleByK => "first_negative_divisible_by_k",
             KClosed::LastNegativeDivisibleByK => "last_negative_divisible_by_k",
+            KClosed::MeanPositiveDivisibleByKTrunc => "mean_positive_divisible_by_k_trunc",
         }
     }
 
@@ -12901,6 +12990,17 @@ impl KClosed {
                         .find(|&v| v < 0 && v % k == 0)
                         .unwrap_or(-1),
                 )
+            }
+            KClosed::MeanPositiveDivisibleByKTrunc => {
+                if k == 0 {
+                    return None;
+                }
+                let xs: Vec<i64> = arr.iter().copied().filter(|&v| v > 0 && v % k == 0).collect();
+                if xs.is_empty() {
+                    Some(0)
+                } else {
+                    Some(xs.iter().copied().fold(0i64, i64::saturating_add) / xs.len() as i64)
+                }
             }
         }
     }
@@ -15064,6 +15164,25 @@ KClosed::MinWhereAbsNeK => format!(
 }}
 "
             ),
+            KClosed::MeanPositiveDivisibleByKTrunc => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{
+    total: i64 = 0;
+    n: i64 = 0;
+    for item in arr {{
+        if item > 0 {{
+            if item % k == 0 {{
+                total = total + item;
+                n = n + 1;
+            }}
+        }}
+    }}
+    if n == 0 {{
+        return 0;
+    }}
+    return total / n;
+}}
+"
+            ),
 
         }
     }
@@ -15223,6 +15342,7 @@ fn try_k_closed(
         KClosed::LastPositiveDivisibleByK,
         KClosed::FirstNegativeDivisibleByK,
         KClosed::LastNegativeDivisibleByK,
+        KClosed::MeanPositiveDivisibleByKTrunc,
     ] {
         let ok = inputs
             .iter()
@@ -16729,5 +16849,9 @@ mod tests {
         assert_eq!(DualAccum::ProductThirteenthPowersOddNonZero.eval(&[0, -3, 1, 2]), Some(-1594323));
         assert_eq!(DualAccum::ProductThirteenthPowersEvenNonZero.eval(&[0, 1, 3]), Some(1));
         assert_eq!(KClosed::LastNegativeDivisibleByK.eval(&[0, -4, 6, -8], 2), Some(-8));
+        assert_eq!(DualAccum::MeanThirteenthPowersEvenNonZeroTrunc.eval(&[0, -2, 2, 3]), Some(0));
+        assert_eq!(DualAccum::MeanThirteenthPowersOddNonZeroTrunc.eval(&[0, -3, 1, 2]), Some(-797161));
+        assert_eq!(DualAccum::MeanThirteenthPowersEvenNonZeroTrunc.eval(&[0, 1, 3]), Some(0));
+        assert_eq!(KClosed::MeanPositiveDivisibleByKTrunc.eval(&[0, -4, 6, 8], 2), Some(7));
     }
 }
