@@ -1496,6 +1496,8 @@ fn try_dual_and_pairwise(
     for idx in [
         IndexScan::SumEvenIndices,
         IndexScan::SumOddIndices,
+        IndexScan::ProductEvenIndices,
+        IndexScan::ProductOddIndices,
         IndexScan::CountPeaks,
         IndexScan::CountValleys,
         IndexScan::CountDistinct,
@@ -1531,6 +1533,10 @@ fn try_dual_and_pairwise(
 enum IndexScan {
     SumEvenIndices,
     SumOddIndices,
+    /// Product of elements at even indices (empty → 1).
+    ProductEvenIndices,
+    /// Product of elements at odd indices (empty → 1).
+    ProductOddIndices,
     /// Local peaks: `arr[i] > arr[i-1] && arr[i] > arr[i+1]` for interior i.
     CountPeaks,
     /// Local valleys: `arr[i] < arr[i-1] && arr[i] < arr[i+1]` for interior i.
@@ -1554,6 +1560,8 @@ impl IndexScan {
         match self {
             IndexScan::SumEvenIndices => "sum_even_indices",
             IndexScan::SumOddIndices => "sum_odd_indices",
+            IndexScan::ProductEvenIndices => "product_even_indices",
+            IndexScan::ProductOddIndices => "product_odd_indices",
             IndexScan::CountPeaks => "count_peaks",
             IndexScan::CountValleys => "count_valleys",
             IndexScan::CountDistinct => "count_distinct",
@@ -1583,6 +1591,24 @@ impl IndexScan {
                         .filter(|(i, _)| i % 2 == 1)
                         .map(|(_, &v)| v)
                         .fold(0i64, i64::saturating_add),
+                )
+            }
+            IndexScan::ProductEvenIndices => {
+                Some(
+                    arr.iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % 2 == 0)
+                        .map(|(_, &v)| v)
+                        .fold(1i64, i64::saturating_mul),
+                )
+            }
+            IndexScan::ProductOddIndices => {
+                Some(
+                    arr.iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % 2 == 1)
+                        .map(|(_, &v)| v)
+                        .fold(1i64, i64::saturating_mul),
                 )
             }
             IndexScan::CountPeaks => {
@@ -1693,6 +1719,28 @@ impl IndexScan {
     i: i64 = 1;\n\
     while i < arr.len {{\n\
         total = total + arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::ProductEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 1;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        total = total * arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::ProductOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        total = total * arr[i];\n\
         i = i + 2;\n\
     }}\n\
     return total;\n\
@@ -2830,6 +2878,8 @@ mod tests {
     fn index_scan_eval_helpers() {
         assert_eq!(IndexScan::SumEvenIndices.eval(&[1, 2, 3, 4]), Some(4));
         assert_eq!(IndexScan::SumOddIndices.eval(&[1, 2, 3, 4]), Some(6));
+        assert_eq!(IndexScan::ProductEvenIndices.eval(&[2, 9, 3, 8]), Some(6));
+        assert_eq!(IndexScan::ProductOddIndices.eval(&[2, 9, 3, 8]), Some(72));
         assert_eq!(IndexScan::CountDistinct.eval(&[1, 2, 1, 3]), Some(3));
         assert_eq!(IndexScan::CountDistinct.eval(&[]), Some(0));
         assert_eq!(IndexScan::CountValleys.eval(&[3, 1, 4, 0, 2]), Some(2));

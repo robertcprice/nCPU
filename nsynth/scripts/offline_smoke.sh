@@ -260,6 +260,10 @@ fn index_sum_even(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, &v)| v).sum()
 }
 
+fn index_product_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, &v)| v).fold(1, i64::saturating_mul)
+}
+
 fn index_count_peaks(arr: &[i64]) -> i64 {
     if arr.len() < 3 { return 0; }
     (1..arr.len() - 1).filter(|&i| arr[i] > arr[i - 1] && arr[i] > arr[i + 1]).count() as i64
@@ -530,6 +534,7 @@ mod tests {
         assert_eq!(dual_lcm_all(&[2, 3, 4]), Some(12));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
+        assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
         assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);
         assert_eq!(index_count_valleys(&[3, 1, 4, 0, 2]), 2);
         assert_eq!(index_count_distinct(&[1, 2, 1, 3]), 3);
