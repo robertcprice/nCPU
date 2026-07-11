@@ -279,9 +279,60 @@ fn dual_count_odds(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x % 2 != 0).count() as i64
 }
 
+fn dual_any_zero(arr: &[i64]) -> i64 {
+    if arr.iter().any(|&x| x == 0) { 1 } else { 0 }
+}
+
+fn dual_all_positive(arr: &[i64]) -> i64 {
+    if arr.iter().all(|&x| x > 0) { 1 } else { 0 }
+}
+
+fn dual_all_negative(arr: &[i64]) -> i64 {
+    if arr.iter().all(|&x| x < 0) { 1 } else { 0 }
+}
+
+fn dual_count_zeros(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x == 0).count() as i64
+}
+
+fn dual_has_duplicate(arr: &[i64]) -> i64 {
+    for i in 0..arr.len() {
+        if arr[..i].contains(&arr[i]) { return 1; }
+    }
+    0
+}
+
+fn dual_max_negative(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for &x in arr {
+        if x < 0 && (!found || x > best) {
+            best = x;
+            found = true;
+        }
+    }
+    best
+}
+
+fn dual_sum_even_values(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x % 2 == 0).copied().sum()
+}
+
+fn dual_sum_odd_values(arr: &[i64]) -> i64 {
+    arr.iter().filter(|&&x| x % 2 != 0).copied().sum()
+}
+
+fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
+fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
+
 fn k_kth_from_end(arr: &[i64], k: i64) -> Option<i64> {
     if k < 1 || k as usize > arr.len() { return None; }
     Some(arr[arr.len() - (k as usize)])
+}
+
+fn k_element_at(arr: &[i64], k: i64) -> Option<i64> {
+    if k < 0 || k as usize >= arr.len() { return None; }
+    Some(arr[k as usize])
 }
 
 fn dual_second_min(arr: &[i64]) -> Option<i64> {
@@ -470,6 +521,56 @@ fn pairwise_count_adj_eq(arr: &[i64]) -> i64 {
     (1..arr.len()).filter(|&i| arr[i] == arr[i - 1]).count() as i64
 }
 
+fn pairwise_max_increase(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut best = 0i64;
+    for i in 1..arr.len() {
+        let rise = arr[i] - arr[i - 1];
+        if rise > best { best = rise; }
+    }
+    best
+}
+
+fn pairwise_max_decrease(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut best = 0i64;
+    for i in 1..arr.len() {
+        let fall = arr[i - 1] - arr[i];
+        if fall > best { best = fall; }
+    }
+    best
+}
+
+fn pairwise_longest_nondec_run(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best = 1i64;
+    let mut cur = 1i64;
+    for i in 1..arr.len() {
+        if arr[i] >= arr[i - 1] {
+            cur += 1;
+            if cur > best { best = cur; }
+        } else {
+            cur = 1;
+        }
+    }
+    Some(best)
+}
+
+fn index_middle(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    Some(arr[arr.len() / 2])
+}
+
+fn index_second(arr: &[i64]) -> Option<i64> {
+    if arr.len() < 2 { return None; }
+    Some(arr[1])
+}
+
+fn index_second_last(arr: &[i64]) -> Option<i64> {
+    if arr.len() < 2 { return None; }
+    Some(arr[arr.len() - 2])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,7 +704,22 @@ mod tests {
         assert_eq!(dual_sum_positives(&[-1, 2, 3, -4]), 5);
         assert_eq!(dual_sum_negatives(&[-1, 2, 3, -4]), -5);
         assert_eq!(dual_count_odds(&[1, 2, 3, 4, 0]), 2);
+        assert_eq!(dual_any_zero(&[1, 0, -1]), 1);
+        assert_eq!(dual_all_positive(&[1, 2, 3]), 1);
+        assert_eq!(dual_all_negative(&[-1, -2]), 1);
+        assert_eq!(dual_count_zeros(&[0, 1, 0, 0]), 3);
+        assert_eq!(dual_has_duplicate(&[1, 2, 1]), 1);
+        assert_eq!(dual_has_duplicate(&[1, 2, 3]), 0);
+        assert_eq!(dual_max_negative(&[-5, -1, 3]), -1);
+        assert_eq!(dual_sum_even_values(&[1, 2, 3, 4]), 6);
+        assert_eq!(dual_sum_odd_values(&[1, 2, 3, 4]), 4);
+        assert_eq!(dual_len(&[]), 0);
+        assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
+        assert_eq!(k_element_at(&[10, 20, 30], 1), Some(20));
+        assert_eq!(index_middle(&[1, 2, 3]), Some(2));
+        assert_eq!(index_second(&[10, 20, 30]), Some(20));
+        assert_eq!(index_second_last(&[10, 20, 30]), Some(20));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_product_even(&[2, 9, 3, 8]), 6);
@@ -634,6 +750,9 @@ mod tests {
         assert_eq!(pairwise_longest_inc_run(&[1, 2, 0, 3, 4, 5, 1]), Some(4));
         assert_eq!(pairwise_longest_dec_run(&[5, 4, 3, 0, 2, 1]), Some(4));
         assert_eq!(pairwise_count_adj_eq(&[1, 1, 2, 2, 2, 3]), 3);
+        assert_eq!(pairwise_max_increase(&[1, 5, 2, 9]), 7);
+        assert_eq!(pairwise_max_decrease(&[9, 2, 8, 1]), 7);
+        assert_eq!(pairwise_longest_nondec_run(&[1, 2, 2, 0, 3, 4]), Some(3));
     }
 }
 EOF
@@ -696,6 +815,24 @@ fn duplicate_each(s: &str, sep: &str) -> String {
     out.join(sep)
 }
 
+fn filter_len_eq2(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() == 2).collect::<Vec<_>>().join(sep)
+}
+
+fn dedup_all(s: &str, sep: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for w in s.split(sep) {
+        if !out.contains(&w) { out.push(w); }
+    }
+    out.join(sep)
+}
+
+fn sort_by_len(s: &str, sep: &str) -> String {
+    let mut owned: Vec<String> = s.split(sep).map(|w| w.to_string()).collect();
+    owned.sort_by_key(|w| w.chars().count());
+    owned.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +851,9 @@ mod tests {
         assert_eq!(first_word("alpha beta gamma", " "), "alpha");
         assert_eq!(last_word("alpha beta gamma", " "), "gamma");
         assert_eq!(duplicate_each("a b", " "), "a a b b");
+        assert_eq!(filter_len_eq2("to be or not", " "), "to be or");
+        assert_eq!(dedup_all("a b a c b", " "), "a b c");
+        assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
     }
 }
 EOF

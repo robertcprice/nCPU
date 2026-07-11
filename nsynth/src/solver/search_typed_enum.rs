@@ -445,7 +445,7 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         });
                     }
                     // FILTER by absolute length thresholds (short / long words).
-                    for tag in ["gt1", "gt2", "eq1", "lt2", "eq2"] {
+                    for tag in ["gt1", "gt2", "eq1", "lt2", "eq2", "gt3", "eq3"] {
                         let outs: Vec<V> = e
                             .outs
                             .iter()
@@ -458,8 +458,10 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                                             match tag {
                                                 "gt1" => n > 1,
                                                 "gt2" => n > 2,
+                                                "gt3" => n > 3,
                                                 "lt2" => n < 2,
                                                 "eq2" => n == 2,
+                                                "eq3" => n == 3,
                                                 _ => n == 1,
                                             }
                                         })
@@ -471,8 +473,10 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         let cond_mog = match tag {
                             "gt1" => "w.len > 1",
                             "gt2" => "w.len > 2",
+                            "gt3" => "w.len > 3",
                             "lt2" => "w.len < 2",
                             "eq2" => "w.len == 2",
+                            "eq3" => "w.len == 3",
                             _ => "w.len == 1",
                         };
                         let mut helpers = e.helpers.clone();

@@ -757,6 +757,22 @@ enum DualAccum {
     AnyPositive,
     /// 1 if any element is negative, else 0.
     AnyNegative,
+    /// 1 if any element is zero, else 0.
+    AnyZero,
+    /// 1 if every element is positive (empty → 1), else 0.
+    AllPositive,
+    /// 1 if every element is negative (empty → 1), else 0.
+    AllNegative,
+    /// Count of zero elements.
+    CountZeros,
+    /// 1 if any value appears more than once, else 0.
+    HasDuplicate,
+    /// Maximum among strictly-negative elements (none → 0).
+    MaxNegative,
+    /// Sum of even-valued elements (value parity, not index).
+    SumEvenValues,
+    /// Sum of odd-valued elements (value parity, not index).
+    SumOddValues,
 }
 
 impl DualAccum {
@@ -788,12 +804,45 @@ impl DualAccum {
             DualAccum::AllEqual => "all_equal",
             DualAccum::AnyPositive => "any_positive",
             DualAccum::AnyNegative => "any_negative",
+            DualAccum::AnyZero => "any_zero",
+            DualAccum::AllPositive => "all_positive",
+            DualAccum::AllNegative => "all_negative",
+            DualAccum::CountZeros => "count_zeros",
+            DualAccum::HasDuplicate => "has_duplicate",
+            DualAccum::MaxNegative => "max_negative",
+            DualAccum::SumEvenValues => "sum_even_values",
+            DualAccum::SumOddValues => "sum_odd_values",
         }
     }
 
     fn eval(self, arr: &[i64]) -> Option<i64> {
+        // Ops well-defined on [] — do not early-reject (IsEmpty/Len/Any*/All*/counts).
         if arr.is_empty() {
-            return None;
+            return match self {
+                DualAccum::Len => Some(0),
+                DualAccum::IsEmpty => Some(1),
+                DualAccum::AllEqual
+                | DualAccum::AllPositive
+                | DualAccum::AllNegative => Some(1),
+                DualAccum::AnyPositive
+                | DualAccum::AnyNegative
+                | DualAccum::AnyZero
+                | DualAccum::HasDuplicate => Some(0),
+                DualAccum::CountNegatives
+                | DualAccum::CountEvens
+                | DualAccum::CountOdds
+                | DualAccum::CountZeros
+                | DualAccum::SumPositives
+                | DualAccum::SumNegatives
+                | DualAccum::SumSquares
+                | DualAccum::AbsSum
+                | DualAccum::MaxAbs
+                | DualAccum::MinPositive
+                | DualAccum::MaxNegative
+                | DualAccum::SumEvenValues
+                | DualAccum::SumOddValues => Some(0),
+                _ => None,
+            };
         }
         match self {
             DualAccum::Range => {
@@ -995,6 +1044,58 @@ impl DualAccum {
             DualAccum::AnyNegative => {
                 Some(if arr.iter().any(|&x| x < 0) { 1 } else { 0 })
             }
+            DualAccum::AnyZero => {
+                Some(if arr.iter().any(|&x| x == 0) { 1 } else { 0 })
+            }
+            DualAccum::AllPositive => {
+                Some(if arr.iter().all(|&x| x > 0) { 1 } else { 0 })
+            }
+            DualAccum::AllNegative => {
+                Some(if arr.iter().all(|&x| x < 0) { 1 } else { 0 })
+            }
+            DualAccum::CountZeros => {
+                Some(arr.iter().filter(|&&x| x == 0).count() as i64)
+            }
+            DualAccum::HasDuplicate => {
+                let mut found = 0i64;
+                for i in 0..arr.len() {
+                    for j in 0..i {
+                        if arr[j] == arr[i] {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if found == 1 {
+                        break;
+                    }
+                }
+                Some(found)
+            }
+            DualAccum::MaxNegative => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x < 0 {
+                        if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            DualAccum::SumEvenValues => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 == 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
+            DualAccum::SumOddValues => Some(
+                arr.iter()
+                    .filter(|&&x| x % 2 != 0)
+                    .copied()
+                    .fold(0i64, i64::saturating_add),
+            ),
         }
     }
 
@@ -1307,6 +1408,98 @@ impl DualAccum {
     return 0;\n\
 }}\n"
             ),
+            DualAccum::AnyZero => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item == 0 {{ return 1; }}\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::AllPositive => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item <= 0 {{ return 0; }}\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
+            DualAccum::AllNegative => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    for item in arr {{\n\
+        if item >= 0 {{ return 0; }}\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
+            DualAccum::CountZeros => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        if item == 0 {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            DualAccum::HasDuplicate => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        j: i64 = 0;\n\
+        while j < i {{\n\
+            if arr[j] == arr[i] {{\n\
+                return 1;\n\
+            }}\n\
+            j = j + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0;\n\
+}}\n"
+            ),
+            DualAccum::MaxNegative => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item > best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::SumEvenValues => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            DualAccum::SumOddValues => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            total = total + item;\n\
+        }}\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1340,6 +1533,12 @@ enum PairwiseScan {
     LongestDecreasingRun,
     /// Count positions where `arr[i] == arr[i-1]`.
     CountAdjacentEq,
+    /// Max positive adjacent rise `arr[i]-arr[i-1]` (0 if none).
+    MaxIncrease,
+    /// Max positive adjacent fall `arr[i-1]-arr[i]` (0 if none).
+    MaxDecrease,
+    /// Length of the longest non-decreasing contiguous run.
+    LongestNonDecreasingRun,
 }
 
 impl PairwiseScan {
@@ -1358,6 +1557,9 @@ impl PairwiseScan {
             PairwiseScan::LongestIncreasingRun => "longest_increasing_run",
             PairwiseScan::LongestDecreasingRun => "longest_decreasing_run",
             PairwiseScan::CountAdjacentEq => "count_adjacent_eq",
+            PairwiseScan::MaxIncrease => "max_increase",
+            PairwiseScan::MaxDecrease => "max_decrease",
+            PairwiseScan::LongestNonDecreasingRun => "longest_non_decreasing_run",
         }
     }
 
@@ -1366,7 +1568,8 @@ impl PairwiseScan {
             return match self {
                 PairwiseScan::LongestPlateau
                 | PairwiseScan::LongestIncreasingRun
-                | PairwiseScan::LongestDecreasingRun => None,
+                | PairwiseScan::LongestDecreasingRun
+                | PairwiseScan::LongestNonDecreasingRun => None,
                 PairwiseScan::StrictlyIncreasing
                 | PairwiseScan::StrictlyDecreasing
                 | PairwiseScan::NonDecreasing
@@ -1382,7 +1585,8 @@ impl PairwiseScan {
                 | PairwiseScan::NonIncreasing => 1,
                 PairwiseScan::LongestPlateau
                 | PairwiseScan::LongestIncreasingRun
-                | PairwiseScan::LongestDecreasingRun => 1,
+                | PairwiseScan::LongestDecreasingRun
+                | PairwiseScan::LongestNonDecreasingRun => 1,
                 _ => 0,
             });
         }
@@ -1523,6 +1727,41 @@ impl PairwiseScan {
                     }
                 }
                 Some(count)
+            }
+            PairwiseScan::MaxIncrease => {
+                let mut best = 0i64;
+                for i in 1..arr.len() {
+                    let rise = arr[i].saturating_sub(arr[i - 1]);
+                    if rise > best {
+                        best = rise;
+                    }
+                }
+                Some(best)
+            }
+            PairwiseScan::MaxDecrease => {
+                let mut best = 0i64;
+                for i in 1..arr.len() {
+                    let fall = arr[i - 1].saturating_sub(arr[i]);
+                    if fall > best {
+                        best = fall;
+                    }
+                }
+                Some(best)
+            }
+            PairwiseScan::LongestNonDecreasingRun => {
+                let mut best = 1i64;
+                let mut cur = 1i64;
+                for i in 1..arr.len() {
+                    if arr[i] >= arr[i - 1] {
+                        cur += 1;
+                        if cur > best {
+                            best = cur;
+                        }
+                    } else {
+                        cur = 1;
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -1706,6 +1945,47 @@ impl PairwiseScan {
     return count;\n\
 }}\n"
             ),
+            PairwiseScan::MaxIncrease => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        rise: i64 = arr[i] - arr[i - 1];\n\
+        if rise > best {{ best = rise; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            PairwiseScan::MaxDecrease => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        fall: i64 = arr[i - 1] - arr[i];\n\
+        if fall > best {{ best = fall; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            PairwiseScan::LongestNonDecreasingRun => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 1;\n\
+    cur: i64 = 1;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] >= arr[i - 1] {{\n\
+            cur = cur + 1;\n\
+            if cur > best {{ best = cur; }}\n\
+        }} else {{\n\
+            cur = 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -1743,6 +2023,14 @@ fn try_dual_and_pairwise(
         DualAccum::AllEqual,
         DualAccum::AnyPositive,
         DualAccum::AnyNegative,
+        DualAccum::AnyZero,
+        DualAccum::AllPositive,
+        DualAccum::AllNegative,
+        DualAccum::CountZeros,
+        DualAccum::HasDuplicate,
+        DualAccum::MaxNegative,
+        DualAccum::SumEvenValues,
+        DualAccum::SumOddValues,
     ] {
         let ok = inputs
             .iter()
@@ -1776,6 +2064,9 @@ fn try_dual_and_pairwise(
         PairwiseScan::LongestIncreasingRun,
         PairwiseScan::LongestDecreasingRun,
         PairwiseScan::CountAdjacentEq,
+        PairwiseScan::MaxIncrease,
+        PairwiseScan::MaxDecrease,
+        PairwiseScan::LongestNonDecreasingRun,
     ] {
         let ok = inputs
             .iter()
@@ -1808,6 +2099,9 @@ fn try_dual_and_pairwise(
         IndexScan::First,
         IndexScan::Last,
         IndexScan::Mode,
+        IndexScan::Middle,
+        IndexScan::Second,
+        IndexScan::SecondLast,
     ] {
         let ok = inputs
             .iter()
@@ -1855,6 +2149,12 @@ enum IndexScan {
     Last,
     /// Most frequent value (first on a frequency tie; empty → None).
     Mode,
+    /// Middle element `arr[len/2]` (empty → None).
+    Middle,
+    /// Second element `arr[1]` (len < 2 → None).
+    Second,
+    /// Second-to-last element (len < 2 → None).
+    SecondLast,
 }
 
 impl IndexScan {
@@ -1872,6 +2172,9 @@ impl IndexScan {
             IndexScan::First => "first",
             IndexScan::Last => "last",
             IndexScan::Mode => "mode",
+            IndexScan::Middle => "middle",
+            IndexScan::Second => "second",
+            IndexScan::SecondLast => "second_last",
         }
     }
 
@@ -1998,6 +2301,27 @@ impl IndexScan {
                     }
                 }
                 Some(best_val)
+            }
+            IndexScan::Middle => {
+                if arr.is_empty() {
+                    None
+                } else {
+                    Some(arr[arr.len() / 2])
+                }
+            }
+            IndexScan::Second => {
+                if arr.len() < 2 {
+                    None
+                } else {
+                    Some(arr[1])
+                }
+            }
+            IndexScan::SecondLast => {
+                if arr.len() < 2 {
+                    None
+                } else {
+                    Some(arr[arr.len() - 2])
+                }
             }
         }
     }
@@ -2158,6 +2482,21 @@ impl IndexScan {
     return best_val;\n\
 }}\n"
             ),
+            IndexScan::Middle => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr[arr.len / 2];\n\
+}}\n"
+            ),
+            IndexScan::Second => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr[1];\n\
+}}\n"
+            ),
+            IndexScan::SecondLast => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr[arr.len - 2];\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2175,6 +2514,8 @@ enum KClosed {
     LastIndexOf,
     /// 1-indexed from end: `arr[len - k]`.
     KthFromEnd,
+    /// 0-indexed element at `k` (out of bounds → None).
+    ElementAt,
 }
 
 impl KClosed {
@@ -2185,6 +2526,7 @@ impl KClosed {
             KClosed::FirstIndexOf => "first_index_of",
             KClosed::LastIndexOf => "last_index_of",
             KClosed::KthFromEnd => "kth_from_end",
+            KClosed::ElementAt => "element_at",
         }
     }
 
@@ -2227,6 +2569,12 @@ impl KClosed {
                     return None;
                 }
                 Some(arr[arr.len() - (k as usize)])
+            }
+            KClosed::ElementAt => {
+                if k < 0 || k as usize >= arr.len() {
+                    return None;
+                }
+                Some(arr[k as usize])
             }
         }
     }
@@ -2274,6 +2622,11 @@ impl KClosed {
     return arr[arr.len - k];\n\
 }}\n"
             ),
+            KClosed::ElementAt => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    return arr[k];\n\
+}}\n"
+            ),
         }
     }
 }
@@ -2291,6 +2644,7 @@ fn try_k_closed(
         KClosed::FirstIndexOf,
         KClosed::LastIndexOf,
         KClosed::KthFromEnd,
+        KClosed::ElementAt,
     ] {
         let ok = inputs
             .iter()
@@ -3247,5 +3601,32 @@ mod tests {
         assert_eq!(DualAccum::SumPositives.eval(&[-1, 2, 3, -4]), Some(5));
         assert_eq!(DualAccum::SumNegatives.eval(&[-1, 2, 3, -4]), Some(-5));
         assert_eq!(DualAccum::CountOdds.eval(&[1, 2, 3, 4, 0]), Some(2));
+        assert_eq!(DualAccum::AnyZero.eval(&[1, 0, -1]), Some(1));
+        assert_eq!(DualAccum::AnyZero.eval(&[1, 2]), Some(0));
+        assert_eq!(DualAccum::AllPositive.eval(&[1, 2, 3]), Some(1));
+        assert_eq!(DualAccum::AllPositive.eval(&[1, 0, 3]), Some(0));
+        assert_eq!(DualAccum::AllNegative.eval(&[-1, -2]), Some(1));
+        assert_eq!(DualAccum::CountZeros.eval(&[0, 1, 0, 0]), Some(3));
+        assert_eq!(DualAccum::HasDuplicate.eval(&[1, 2, 1]), Some(1));
+        assert_eq!(DualAccum::HasDuplicate.eval(&[1, 2, 3]), Some(0));
+        assert_eq!(DualAccum::MaxNegative.eval(&[-5, -1, 3]), Some(-1));
+        assert_eq!(DualAccum::MaxNegative.eval(&[1, 2]), Some(0));
+        assert_eq!(DualAccum::SumEvenValues.eval(&[1, 2, 3, 4]), Some(6));
+        assert_eq!(DualAccum::SumOddValues.eval(&[1, 2, 3, 4]), Some(4));
+        assert_eq!(DualAccum::Len.eval(&[]), Some(0));
+        assert_eq!(DualAccum::IsEmpty.eval(&[]), Some(1));
+        assert_eq!(DualAccum::IsEmpty.eval(&[1]), Some(0));
+        assert_eq!(PairwiseScan::MaxIncrease.eval(&[1, 5, 2, 9]), Some(7));
+        assert_eq!(PairwiseScan::MaxDecrease.eval(&[9, 2, 8, 1]), Some(7));
+        assert_eq!(
+            PairwiseScan::LongestNonDecreasingRun.eval(&[1, 2, 2, 0, 3, 4]),
+            Some(3)
+        );
+        assert_eq!(IndexScan::Middle.eval(&[1, 2, 3]), Some(2));
+        assert_eq!(IndexScan::Middle.eval(&[1, 2, 3, 4]), Some(3));
+        assert_eq!(IndexScan::Second.eval(&[10, 20, 30]), Some(20));
+        assert_eq!(IndexScan::SecondLast.eval(&[10, 20, 30]), Some(20));
+        assert_eq!(KClosed::ElementAt.eval(&[10, 20, 30], 1), Some(20));
+        assert_eq!(KClosed::ElementAt.eval(&[10, 20], 5), None);
     }
 }
