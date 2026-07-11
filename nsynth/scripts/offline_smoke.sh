@@ -379,6 +379,18 @@ fn dual_max_positive(arr: &[i64]) -> i64 {
     best
 }
 
+fn dual_min_negative(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for &x in arr {
+        if x < 0 && (!found || x < best) {
+            best = x;
+            found = true;
+        }
+    }
+    best
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -870,6 +882,7 @@ mod tests {
         assert_eq!(dual_first_negative(&[2, -4, -1]), -4);
         assert_eq!(dual_last_negative(&[2, -4, -1, 5]), -1);
         assert_eq!(dual_max_positive(&[-2, 5, 3, 0]), 5);
+        assert_eq!(dual_min_negative(&[-2, -5, 3]), -5);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));

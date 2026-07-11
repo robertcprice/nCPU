@@ -793,6 +793,8 @@ enum DualAccum {
     LastNegative,
     /// Maximum among strictly-positive elements (none → 0).
     MaxPositive,
+    /// Minimum among strictly-negative elements (none → 0).
+    MinNegative,
 }
 
 impl DualAccum {
@@ -842,6 +844,7 @@ impl DualAccum {
             DualAccum::FirstNegative => "first_negative",
             DualAccum::LastNegative => "last_negative",
             DualAccum::MaxPositive => "max_positive",
+            DualAccum::MinNegative => "min_negative",
         }
     }
 
@@ -872,6 +875,7 @@ impl DualAccum {
                 | DualAccum::MinPositive
                 | DualAccum::MaxNegative
                 | DualAccum::MaxPositive
+                | DualAccum::MinNegative
                 | DualAccum::SumEvenValues
                 | DualAccum::SumOddValues
                 | DualAccum::AlternatingSum
@@ -1205,6 +1209,19 @@ impl DualAccum {
                 for &x in arr {
                     if x > 0 {
                         if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            DualAccum::MinNegative => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x < 0 {
+                        if !found || x < best {
                             best = x;
                             found = true;
                         }
@@ -1721,6 +1738,25 @@ impl DualAccum {
                 found = 1;\n\
             }} else {{\n\
                 if item > best {{\n\
+                    best = item;\n\
+                }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MinNegative => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item < 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item < best {{\n\
                     best = item;\n\
                 }}\n\
             }}\n\
@@ -2357,6 +2393,7 @@ fn try_dual_and_pairwise(
         DualAccum::FirstNegative,
         DualAccum::LastNegative,
         DualAccum::MaxPositive,
+        DualAccum::MinNegative,
     ] {
         let ok = inputs
             .iter()
@@ -4245,5 +4282,7 @@ mod tests {
         assert_eq!(IndexScan::ArgMaxAbs.eval(&[-2, 5, -8]), Some(2));
         assert_eq!(DualAccum::MaxPositive.eval(&[-2, 5, 3, 0]), Some(5));
         assert_eq!(DualAccum::MaxPositive.eval(&[-1, 0]), Some(0));
+        assert_eq!(DualAccum::MinNegative.eval(&[-2, -5, 3]), Some(-5));
+        assert_eq!(DualAccum::MinNegative.eval(&[1, 0]), Some(0));
     }
 }
