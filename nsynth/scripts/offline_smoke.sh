@@ -128,6 +128,44 @@ fn synthesize_k(examples: &[(Vec<i64>, i64, i64)]) -> Option<(Pred, Reduce)> {
     })
 }
 
+fn dual_range(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let lo = *arr.iter().min()?;
+    let hi = *arr.iter().max()?;
+    Some(hi - lo)
+}
+
+fn dual_second_max(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut first = arr[0];
+    let mut second = arr[0];
+    for &item in arr {
+        if item > first {
+            second = first;
+            first = item;
+        } else if item > second {
+            second = item;
+        }
+    }
+    Some(second)
+}
+
+fn pairwise_max_abs_diff(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    let mut best = 0i64;
+    for i in 1..arr.len() {
+        let mut d = arr[i] - arr[i - 1];
+        if d < 0 { d = -d; }
+        if d > best { best = d; }
+    }
+    best
+}
+
+fn pairwise_count_adj_diff(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    (1..arr.len()).filter(|&i| arr[i] != arr[i - 1]).count() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +237,20 @@ mod tests {
         let (pred, reduce) = synthesize_k(&ex).expect("gt k");
         assert!(matches!(pred, Pred::GtK));
         assert!(matches!(reduce, Reduce::Count));
+    }
+
+    #[test]
+    fn dual_range_and_second_max() {
+        assert_eq!(dual_range(&[1, 5, 3]), Some(4));
+        assert_eq!(dual_second_max(&[3, 1, 4, 1, 5]), Some(4));
+        assert_eq!(dual_second_max(&[2, 8, 3]), Some(3));
+        assert_eq!(dual_second_max(&[5, 10, 8]), Some(8));
+    }
+
+    #[test]
+    fn pairwise_max_abs_and_count_diff() {
+        assert_eq!(pairwise_max_abs_diff(&[10, 3, 8]), 7);
+        assert_eq!(pairwise_count_adj_diff(&[1, 1, 2, 2, 3]), 2);
     }
 }
 EOF

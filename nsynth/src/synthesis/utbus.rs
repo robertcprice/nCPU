@@ -28,7 +28,9 @@
 //!     the same class the legacy array path covers: identity, an element-wise
 //!     affine / abs / square map, sort, reverse, prefix-sum, and a predicate
 //!     filter (incl. threshold preds vs optional scalar `k`) — each then
-//!     reduced via sum / max / min / count and emitted as Mog source.
+//!     reduced via sum / max / min / count / product and emitted as Mog source.
+//!   * Closed dual-accum (range, second_max) and pairwise-scan (max abs diff,
+//!     count adjacent diffs) families for native A3/A4 parity.
 //!   * Acceptance via [`verify_problem_code_strict`]; the first verified
 //!     candidate wins (all example-matching programs are tried cheapest-first
 //!     so Sum/Count collisions on examples can still pass holdouts).
@@ -625,6 +627,223 @@ fn array_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<Option<i64>>)
     }
 }
 
+/// Dual-accumulator programs (native A3 parity): two coupled running state
+/// variables reduced to one scalar. Closed set — not stacked on [`ArrayProgram`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DualAccum {
+    /// `max(arr) - min(arr)`.
+    Range,
+    /// Second-largest element (teacher cascade; ties keep first).
+    SecondMax,
+}
+
+impl DualAccum {
+    fn label(self) -> &'static str {
+        match self {
+            DualAccum::Range => "range",
+            DualAccum::SecondMax => "second_max",
+        }
+    }
+
+    fn eval(self, arr: &[i64]) -> Option<i64> {
+        if arr.is_empty() {
+            return None;
+        }
+        match self {
+            DualAccum::Range => {
+                let mut lo = arr[0];
+                let mut hi = arr[0];
+                for &item in arr {
+                    if item < lo {
+                        lo = item;
+                    }
+                    if item > hi {
+                        hi = item;
+                    }
+                }
+                Some(hi.saturating_sub(lo))
+            }
+            DualAccum::SecondMax => {
+                // Mirror search_codegen::code_second_max exactly.
+                let mut first = arr[0];
+                let mut second = arr[0];
+                for &item in arr {
+                    if item > first {
+                        second = first;
+                        first = item;
+                    } else if item > second {
+                        second = item;
+                    }
+                }
+                Some(second)
+            }
+        }
+    }
+
+    fn emit(self, fn_name: &str) -> String {
+        match self {
+            DualAccum::Range => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    lo: i64 = arr[0];\n\
+    hi: i64 = arr[0];\n\
+    for item in arr {{\n\
+        if item < lo {{\n\
+            lo = item;\n\
+        }}\n\
+        if item > hi {{\n\
+            hi = item;\n\
+        }}\n\
+    }}\n\
+    return hi - lo;\n\
+}}\n"
+            ),
+            DualAccum::SecondMax => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    first: i64 = arr[0];\n\
+    second: i64 = arr[0];\n\
+    for item in arr {{\n\
+        if item > first {{\n\
+            second = first;\n\
+            first = item;\n\
+        }} else {{\n\
+            if item > second {{\n\
+                second = item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return second;\n\
+}}\n"
+            ),
+        }
+    }
+}
+
+/// Adjacent-pair scans (native A4 parity slice).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PairwiseScan {
+    /// `max |arr[i] - arr[i-1]|`.
+    MaxAbsDiff,
+    /// Count positions where `arr[i] != arr[i-1]`.
+    CountAdjacentDiff,
+}
+
+impl PairwiseScan {
+    fn label(self) -> &'static str {
+        match self {
+            PairwiseScan::MaxAbsDiff => "max_abs_diff",
+            PairwiseScan::CountAdjacentDiff => "count_adjacent_diff",
+        }
+    }
+
+    fn eval(self, arr: &[i64]) -> Option<i64> {
+        if arr.len() < 2 {
+            return Some(0);
+        }
+        match self {
+            PairwiseScan::MaxAbsDiff => {
+                let mut best = 0i64;
+                for i in 1..arr.len() {
+                    let mut diff = arr[i].saturating_sub(arr[i - 1]);
+                    if diff < 0 {
+                        diff = 0i64.saturating_sub(diff);
+                    }
+                    if diff > best {
+                        best = diff;
+                    }
+                }
+                Some(best)
+            }
+            PairwiseScan::CountAdjacentDiff => {
+                let mut count = 0i64;
+                for i in 1..arr.len() {
+                    if arr[i] != arr[i - 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
+        }
+    }
+
+    fn emit(self, fn_name: &str) -> String {
+        match self {
+            PairwiseScan::MaxAbsDiff => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        diff: i64 = arr[i] - arr[i - 1];\n\
+        if diff < 0 {{ diff = 0 - diff; }}\n\
+        if diff > best {{ best = diff; }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            PairwiseScan::CountAdjacentDiff => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] != arr[i - 1] {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+        }
+    }
+}
+
+fn try_dual_and_pairwise(
+    problem: &Problem,
+    fn_name: &str,
+    inputs: &[Vec<i64>],
+    expected: &[i64],
+) -> Option<SolveResult> {
+    for dual in [DualAccum::Range, DualAccum::SecondMax] {
+        let ok = inputs
+            .iter()
+            .zip(expected.iter())
+            .all(|(arr, &y)| dual.eval(arr) == Some(y));
+        if !ok {
+            continue;
+        }
+        let code = dual.emit(fn_name);
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("utbus_dual_{}", dual.label()),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
+    for scan in [PairwiseScan::MaxAbsDiff, PairwiseScan::CountAdjacentDiff] {
+        let ok = inputs
+            .iter()
+            .zip(expected.iter())
+            .all(|(arr, &y)| scan.eval(arr) == Some(y));
+        if !ok {
+            continue;
+        }
+        let code = scan.emit(fn_name);
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("utbus_pairwise_{}", scan.label()),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
+    None
+}
+
 /// Public entry point. Returns `None` unless `NSYNTH_UTBUS=1`. When enabled,
 /// runs the typed bottom-up enumerator over the array transform set and returns
 /// the first candidate that passes [`verify_problem_code_strict`] (examples +
@@ -662,6 +881,14 @@ pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
         match &example.expected {
             Value::Int(v) => expected.push(*v),
             _ => return None,
+        }
+    }
+
+    // Native A3/A4 closed families first (tiny candidate set) for single-array
+    // signatures — dual-accum / pairwise cannot be expressed as filter→map→reduce.
+    if !with_k {
+        if let Some(hit) = try_dual_and_pairwise(problem, fn_name, &inputs, &expected) {
+            return Some(hit);
         }
     }
 
@@ -1167,5 +1394,69 @@ mod tests {
         };
         assert_eq!(prog.eval_scalar(&[1, 5, 3, 0], Some(2)), 2);
         assert_eq!(prog.emit("count_gt", true).contains("item > k"), true);
+    }
+
+    #[test]
+    fn dual_accum_eval_range_and_second_max() {
+        assert_eq!(DualAccum::Range.eval(&[1, 5, 3]), Some(4));
+        assert_eq!(DualAccum::Range.eval(&[-2, 10, 0]), Some(12));
+        // Teacher cascade (matches search_codegen / benchmark seeds).
+        assert_eq!(DualAccum::SecondMax.eval(&[3, 1, 4, 1, 5]), Some(4));
+        assert_eq!(DualAccum::SecondMax.eval(&[2, 8, 3]), Some(3));
+        assert_eq!(DualAccum::SecondMax.eval(&[5, 10, 8]), Some(8));
+        assert!(DualAccum::Range
+            .emit("array_range")
+            .contains("return hi - lo"));
+    }
+
+    #[test]
+    fn pairwise_eval_max_abs_and_count_diff() {
+        assert_eq!(PairwiseScan::MaxAbsDiff.eval(&[10, 3, 8]), Some(7));
+        assert_eq!(PairwiseScan::MaxAbsDiff.eval(&[5, 5]), Some(0));
+        assert_eq!(
+            PairwiseScan::CountAdjacentDiff.eval(&[1, 1, 2, 2, 3]),
+            Some(2)
+        );
+        assert_eq!(PairwiseScan::CountAdjacentDiff.eval(&[7]), Some(0));
+    }
+
+    #[test]
+    fn utbus_solves_array_range() {
+        let problem = array_problem(
+            "array_range",
+            "fn array_range(arr: [i64]) -> i64",
+            &[&[1, 5, 3], &[-2, 10, 0], &[7], &[4, 4, 1]],
+            &[&[10, -5, 2], &[1, 2, 3, 4]],
+            |arr| {
+                let lo = arr.iter().copied().min().unwrap_or(0);
+                let hi = arr.iter().copied().max().unwrap_or(0);
+                hi - lo
+            },
+        );
+        assert_solves(&problem, "range");
+    }
+
+    #[test]
+    fn utbus_solves_second_max() {
+        let problem = array_problem(
+            "second_max",
+            "fn second_max(arr: [i64]) -> i64",
+            &[&[3, 1, 4, 1, 5], &[2, 8, 3], &[7, 7, 2, 9], &[1, 3]],
+            &[&[5, 10, 8], &[4, 4, 4]],
+            |arr| DualAccum::SecondMax.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "second_max");
+    }
+
+    #[test]
+    fn utbus_solves_max_pair_diff() {
+        let problem = array_problem(
+            "max_pair_diff",
+            "fn max_pair_diff(arr: [i64]) -> i64",
+            &[&[10, 3, 8], &[5, 5], &[1, 2, 4, 0], &[-3, 1]],
+            &[&[9, 1, 1], &[0, 0, 5]],
+            |arr| PairwiseScan::MaxAbsDiff.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "max_abs_diff");
     }
 }
