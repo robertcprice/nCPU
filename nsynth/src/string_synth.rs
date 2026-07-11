@@ -776,6 +776,8 @@ enum WordShape {
     DropLastTwo,
     /// Drop the last three words, rejoin.
     DropLastThree,
+    /// Drop the last four words, rejoin.
+    DropLastFour,
     /// Capitalize only the last word (first char upper).
     CapLastWord,
     /// Reverse characters of the first word only.
@@ -844,6 +846,7 @@ impl WordShape {
             WordShape::TakeLastFour => "take_last_four",
             WordShape::DropLastTwo => "drop_last_two",
             WordShape::DropLastThree => "drop_last_three",
+            WordShape::DropLastFour => "drop_last_four",
             WordShape::CapLastWord => "cap_last_word",
             WordShape::ReverseFirstWord => "reverse_first_word",
             WordShape::CapFirstWord => "cap_first_word",
@@ -1139,6 +1142,13 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
                 words[..words.len() - 3].join(sep)
             }
         }
+        WordShape::DropLastFour => {
+            if words.len() <= 4 {
+                String::new()
+            } else {
+                words[..words.len() - 4].join(sep)
+            }
+        }
         WordShape::CapLastWord => {
             if words.is_empty() {
                 String::new()
@@ -1339,7 +1349,10 @@ WordShape::DropLastTwo => format!(
         WordShape::DropLastThree => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 3 {{\n        end = end - 3;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
-        WordShape::CapLastWord => format!(
+                WordShape::DropLastFour => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    end: i64 = words.len;\n    if end > 4 {{\n        end = end - 4;\n    }} else {{\n        end = 0;\n    }}\n    i: i64 = 0;\n    while i < end {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+WordShape::CapLastWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len == 0 {{\n        return \"\";\n    }}\n    out: [string] = [];\n    i: i64 = 0;\n    while i + 1 < words.len {{\n        out.push(words[i]);\n        i = i + 1;\n    }}\n    w: string = words[words.len - 1];\n    first: string = w.slice(0, 1);\n    rest: string = w.slice(1, w.len);\n    out.push(first.upper() + rest);\n    return out.join(\"{sep}\");\n}}\n"
         ),
         WordShape::ReverseFirstWord => format!(
@@ -1387,7 +1400,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 55] = [
+    const SHAPES: [WordShape; 56] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1435,6 +1448,7 @@ pub fn synthesize_word_program(
         WordShape::TakeLastFour,
         WordShape::DropLastTwo,
         WordShape::DropLastThree,
+        WordShape::DropLastFour,
         WordShape::CapLastWord,
         WordShape::ReverseFirstWord,
         WordShape::CapFirstWord,
@@ -2753,6 +2767,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-dollar_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Ampersand count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '&').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"&\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-ampersand_count".to_string(),
                 error: None,
             });
         }
