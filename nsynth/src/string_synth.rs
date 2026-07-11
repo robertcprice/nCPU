@@ -854,6 +854,7 @@ enum WordShape {
     JoinWithParen,
     JoinWithCloseBrace,
     JoinWithCloseBracket,
+    JoinWithCloseParen,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -955,6 +956,7 @@ impl WordShape {
             WordShape::JoinWithParen => "join_with_paren",
             WordShape::JoinWithCloseBrace => "join_with_close_brace",
             WordShape::JoinWithCloseBracket => "join_with_close_bracket",
+            WordShape::JoinWithCloseParen => "join_with_close_paren",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1374,6 +1376,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithParen => words.join("("),
         WordShape::JoinWithCloseBrace => words.join("}"),
         WordShape::JoinWithCloseBracket => words.join("]"),
+        WordShape::JoinWithCloseParen => words.join(")"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1669,6 +1672,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithCloseBracket => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"]\");\n}}\n"
         ),
+        WordShape::JoinWithCloseParen => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\")\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1699,7 +1705,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 94] = [
+    const SHAPES: [WordShape; 95] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1792,6 +1798,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithParen,
         WordShape::JoinWithCloseBrace,
         WordShape::JoinWithCloseBracket,
+        WordShape::JoinWithCloseParen,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -4196,6 +4203,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-syn_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // ETB count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '\x17').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"\\x17\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-etb_count".to_string(),
                 error: None,
             });
         }
