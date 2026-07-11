@@ -833,6 +833,10 @@ enum DualAccum {
     CountNonNegatives,
     /// Count of strictly positive elements (`x > 0`).
     CountPositives,
+    /// Max among even-valued elements (none → 0).
+    MaxEvenValue,
+    /// Max among odd-valued elements (none → 0).
+    MaxOddValue,
 }
 
 impl DualAccum {
@@ -902,6 +906,8 @@ impl DualAccum {
             DualAccum::ProductAbs => "product_abs",
             DualAccum::CountNonNegatives => "count_non_negatives",
             DualAccum::CountPositives => "count_positives",
+            DualAccum::MaxEvenValue => "max_even_value",
+            DualAccum::MaxOddValue => "max_odd_value",
         }
     }
 
@@ -928,6 +934,8 @@ impl DualAccum {
                 | DualAccum::CountNonZeros
                 | DualAccum::CountNonNegatives
                 | DualAccum::CountPositives
+                | DualAccum::MaxEvenValue
+                | DualAccum::MaxOddValue
                 | DualAccum::SumPositives
                 | DualAccum::SumNegatives
                 | DualAccum::SumSquares
@@ -1396,6 +1404,32 @@ impl DualAccum {
             }
             DualAccum::CountPositives => {
                 Some(arr.iter().filter(|&&x| x > 0).count() as i64)
+            }
+            DualAccum::MaxEvenValue => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x % 2 == 0 {
+                        if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
+            }
+            DualAccum::MaxOddValue => {
+                let mut best = 0i64;
+                let mut found = false;
+                for &x in arr {
+                    if x % 2 != 0 {
+                        if !found || x > best {
+                            best = x;
+                            found = true;
+                        }
+                    }
+                }
+                Some(best)
             }
         }
     }
@@ -2146,6 +2180,40 @@ impl DualAccum {
         }}\n\
     }}\n\
     return count;\n\
+}}\n"
+            ),
+            DualAccum::MaxEvenValue => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 == 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item > best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
+            DualAccum::MaxOddValue => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best: i64 = 0;\n\
+    found: i64 = 0;\n\
+    for item in arr {{\n\
+        if item % 2 != 0 {{\n\
+            if found == 0 {{\n\
+                best = item;\n\
+                found = 1;\n\
+            }} else {{\n\
+                if item > best {{ best = item; }}\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return best;\n\
 }}\n"
             ),
         }
@@ -3168,6 +3236,8 @@ fn try_dual_and_pairwise(
         DualAccum::ProductAbs,
         DualAccum::CountNonNegatives,
         DualAccum::CountPositives,
+        DualAccum::MaxEvenValue,
+        DualAccum::MaxOddValue,
     ] {
         let ok = inputs
             .iter()
@@ -3272,6 +3342,8 @@ fn try_dual_and_pairwise(
         IndexScan::AndOddIndices,
         IndexScan::ProductAbsEvenIndices,
         IndexScan::ProductAbsOddIndices,
+        IndexScan::SumSquaresEvenIndices,
+        IndexScan::SumSquaresOddIndices,
     ] {
         let ok = inputs
             .iter()
@@ -3361,6 +3433,10 @@ enum IndexScan {
     ProductAbsEvenIndices,
     /// Product of absolute values at odd indices (no odd → 1).
     ProductAbsOddIndices,
+    /// Sum of squares at even indices.
+    SumSquaresEvenIndices,
+    /// Sum of squares at odd indices.
+    SumSquaresOddIndices,
 }
 
 impl IndexScan {
@@ -3399,6 +3475,8 @@ impl IndexScan {
             IndexScan::AndOddIndices => "and_odd_indices",
             IndexScan::ProductAbsEvenIndices => "product_abs_even_indices",
             IndexScan::ProductAbsOddIndices => "product_abs_odd_indices",
+            IndexScan::SumSquaresEvenIndices => "sum_squares_even_indices",
+            IndexScan::SumSquaresOddIndices => "sum_squares_odd_indices",
         }
     }
 
@@ -3692,6 +3770,20 @@ impl IndexScan {
                     .filter(|(i, _)| i % 2 == 1)
                     .map(|(_, &v)| v.abs())
                     .fold(1i64, i64::saturating_mul),
+            ),
+            IndexScan::SumSquaresEvenIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 0)
+                    .map(|(_, &v)| v.saturating_mul(v))
+                    .fold(0i64, i64::saturating_add),
+            ),
+            IndexScan::SumSquaresOddIndices => Some(
+                arr.iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 1)
+                    .map(|(_, &v)| v.saturating_mul(v))
+                    .fold(0i64, i64::saturating_add),
             ),
         }
     }
@@ -4077,6 +4169,28 @@ impl IndexScan {
     return total;\n\
 }}\n"
             ),
+            IndexScan::SumSquaresEvenIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i] * arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
+            IndexScan::SumSquaresOddIndices => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    total: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        total = total + arr[i] * arr[i];\n\
+        i = i + 2;\n\
+    }}\n\
+    return total;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4142,6 +4256,8 @@ enum KClosed {
     SumAbsLtK,
     /// Count of elements with |v| > k.
     CountAbsGtK,
+    /// Count of elements with |v| < k.
+    CountAbsLtK,
 }
 
 impl KClosed {
@@ -4176,6 +4292,7 @@ impl KClosed {
             KClosed::SumAbsGtK => "sum_abs_gt_k",
             KClosed::SumAbsLtK => "sum_abs_lt_k",
             KClosed::CountAbsGtK => "count_abs_gt_k",
+            KClosed::CountAbsLtK => "count_abs_lt_k",
         }
     }
 
@@ -4361,6 +4478,9 @@ impl KClosed {
             ),
             KClosed::CountAbsGtK => {
                 Some(arr.iter().filter(|&&v| v.abs() > k).count() as i64)
+            }
+            KClosed::CountAbsLtK => {
+                Some(arr.iter().filter(|&&v| v.abs() < k).count() as i64)
             }
         }
     }
@@ -4708,6 +4828,19 @@ impl KClosed {
     return count;\n\
 }}\n"
             ),
+            KClosed::CountAbsLtK => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    count: i64 = 0;\n\
+    for item in arr {{\n\
+        a: i64 = item;\n\
+        if a < 0 {{ a = 0 - a; }}\n\
+        if a < k {{\n\
+            count = count + 1;\n\
+        }}\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -4749,6 +4882,7 @@ fn try_k_closed(
         KClosed::SumAbsGtK,
         KClosed::SumAbsLtK,
         KClosed::CountAbsGtK,
+        KClosed::CountAbsLtK,
     ] {
         let ok = inputs
             .iter()
@@ -5833,5 +5967,10 @@ mod tests {
         assert_eq!(IndexScan::ProductAbsEvenIndices.eval(&[-2, 9, -3, 8]), Some(6));
         assert_eq!(IndexScan::ProductAbsOddIndices.eval(&[-2, 9, -3, 8]), Some(72));
         assert_eq!(KClosed::CountAbsGtK.eval(&[-5, 2, 4], 2), Some(2));
+        assert_eq!(DualAccum::MaxEvenValue.eval(&[1, 8, 3, 4]), Some(8));
+        assert_eq!(DualAccum::MaxOddValue.eval(&[1, 8, 3, 4]), Some(3));
+        assert_eq!(IndexScan::SumSquaresEvenIndices.eval(&[2, 9, 3, 8]), Some(13));
+        assert_eq!(IndexScan::SumSquaresOddIndices.eval(&[2, 9, 3, 8]), Some(145));
+        assert_eq!(KClosed::CountAbsLtK.eval(&[-5, 2, 4], 3), Some(1));
     }
 }

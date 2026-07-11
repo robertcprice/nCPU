@@ -477,6 +477,28 @@ fn dual_count_positives(arr: &[i64]) -> i64 {
     arr.iter().filter(|&&x| x > 0).count() as i64
 }
 
+fn dual_max_even_value(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for &x in arr {
+        if x % 2 == 0 {
+            if !found || x > best { best = x; found = true; }
+        }
+    }
+    best
+}
+
+fn dual_max_odd_value(arr: &[i64]) -> i64 {
+    let mut best = 0i64;
+    let mut found = false;
+    for &x in arr {
+        if x % 2 != 0 {
+            if !found || x > best { best = x; found = true; }
+        }
+    }
+    best
+}
+
 fn dual_len(arr: &[i64]) -> i64 { arr.len() as i64 }
 fn dual_is_empty(arr: &[i64]) -> i64 { if arr.is_empty() { 1 } else { 0 } }
 
@@ -973,6 +995,14 @@ fn index_product_abs_odd(arr: &[i64]) -> i64 {
     arr.iter().enumerate().filter(|(i,_)| i%2==1).map(|(_,&v)| v.abs()).fold(1i64, i64::saturating_mul)
 }
 
+fn index_sum_squares_even(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==0).map(|(_,&v)| v*v).sum()
+}
+
+fn index_sum_squares_odd(arr: &[i64]) -> i64 {
+    arr.iter().enumerate().filter(|(i,_)| i%2==1).map(|(_,&v)| v*v).sum()
+}
+
 fn k_count_eq(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v == k).count() as i64
 }
@@ -1099,6 +1129,10 @@ fn k_sum_abs_lt(arr: &[i64], k: i64) -> i64 {
 
 fn k_count_abs_gt(arr: &[i64], k: i64) -> i64 {
     arr.iter().filter(|&&v| v.abs() > k).count() as i64
+}
+
+fn k_count_abs_lt(arr: &[i64], k: i64) -> i64 {
+    arr.iter().filter(|&&v| v.abs() < k).count() as i64
 }
 
 #[cfg(test)]
@@ -1273,6 +1307,8 @@ mod tests {
         assert_eq!(dual_product_abs(&[-2, 3, -4]), 24);
         assert_eq!(dual_count_non_negatives(&[-1, 0, 2, -3]), 2);
         assert_eq!(dual_count_positives(&[-1, 0, 2, 3]), 2);
+        assert_eq!(dual_max_even_value(&[1, 8, 3, 4]), 8);
+        assert_eq!(dual_max_odd_value(&[1, 8, 3, 4]), 3);
         assert_eq!(dual_len(&[]), 0);
         assert_eq!(dual_is_empty(&[]), 1);
         assert_eq!(k_kth_from_end(&[10, 20, 30, 40], 2), Some(30));
@@ -1311,12 +1347,15 @@ mod tests {
         assert_eq!(k_sum_abs_gt(&[-5, 2, 4], 1), 6);
         assert_eq!(k_sum_abs_lt(&[-5, 2, 4], 3), 7);
         assert_eq!(k_count_abs_gt(&[-5, 2, 4], 2), 2);
+        assert_eq!(k_count_abs_lt(&[-5, 2, 4], 3), 1);
         assert_eq!(index_or_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_or_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(index_and_even(&[7, 2, 3, 8]), 3);
         assert_eq!(index_and_odd(&[1, 7, 4, 3]), 3);
         assert_eq!(index_product_abs_even(&[-2, 9, -3, 8]), 6);
         assert_eq!(index_product_abs_odd(&[-2, 9, -3, 8]), 72);
+        assert_eq!(index_sum_squares_even(&[2, 9, 3, 8]), 13);
+        assert_eq!(index_sum_squares_odd(&[2, 9, 3, 8]), 145);
         assert_eq!(index_xor_even(&[1, 2, 4, 8]), 5);
         assert_eq!(index_xor_odd(&[1, 2, 4, 8]), 10);
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
@@ -1486,9 +1525,20 @@ fn take_first_two(s: &str, sep: &str) -> String {
     words[..n].join(sep)
 }
 
+fn take_first_three(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    let n = words.len().min(3);
+    words[..n].join(sep)
+}
+
 fn drop_first_two(s: &str, sep: &str) -> String {
     let words: Vec<&str> = s.split(sep).collect();
     if words.len() <= 2 { String::new() } else { words[2..].join(sep) }
+}
+
+fn drop_first_three(s: &str, sep: &str) -> String {
+    let words: Vec<&str> = s.split(sep).collect();
+    if words.len() <= 3 { String::new() } else { words[3..].join(sep) }
 }
 
 fn take_last_two(s: &str, sep: &str) -> String {
@@ -1604,6 +1654,10 @@ fn whitespace_count(s: &str) -> i64 {
     s.chars().filter(|c| c.is_ascii_whitespace()).count() as i64
 }
 
+fn alnum_count(s: &str) -> i64 {
+    s.chars().filter(|c| c.is_ascii_alphanumeric()).count() as i64
+}
+
 fn longest_word_len(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|w| !w.is_empty()).map(|w| w.chars().count() as i64).max().unwrap_or(0)
 }
@@ -1641,7 +1695,9 @@ mod tests {
         assert_eq!(sort_by_len("aaa b cc", " "), "b cc aaa");
         assert_eq!(sort_words_desc("b aa c", " "), "c b aa");
         assert_eq!(take_first_two("one two three four", " "), "one two");
+        assert_eq!(take_first_three("one two three four", " "), "one two three");
         assert_eq!(drop_first_two("one two three four", " "), "three four");
+        assert_eq!(drop_first_three("one two three four five", " "), "four five");
         assert_eq!(take_last_two("one two three four", " "), "three four");
         assert_eq!(drop_last_two("one two three four", " "), "one two");
         assert_eq!(digit_count("a1b22"), 3);
@@ -1663,6 +1719,7 @@ mod tests {
         assert_eq!(newline_count("a\nb\nc"), 2);
         assert_eq!(hex_digit_count("xyz0Af!"), 3);
         assert_eq!(whitespace_count("a b\tc\n"), 3);
+        assert_eq!(alnum_count("Hi 2!"), 3);
         assert_eq!(longest_word_len("a to moon", " "), 4);
         assert_eq!(shortest_word_len("a to moon", " "), 1);
     }
