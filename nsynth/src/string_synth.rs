@@ -720,6 +720,8 @@ enum WordShape {
     FirstWord,
     /// Second word only (empty if <2 words).
     SecondWord,
+    /// Third word only (empty if <3 words).
+    ThirdWord,
     /// Last word only.
     LastWord,
     /// Duplicate each word in place: "a b" → "a a b b".
@@ -794,6 +796,7 @@ impl WordShape {
             WordShape::DropLast => "drop_last",
             WordShape::FirstWord => "first_word",
             WordShape::SecondWord => "second_word",
+            WordShape::ThirdWord => "third_word",
             WordShape::LastWord => "last_word",
             WordShape::DuplicateEach => "duplicate_each",
             WordShape::FilterLenEq2 => "filter_len_eq2",
@@ -952,6 +955,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         }
         WordShape::FirstWord => words.first().unwrap_or(&"").to_string(),
         WordShape::SecondWord => words.get(1).unwrap_or(&"").to_string(),
+        WordShape::ThirdWord => words.get(2).unwrap_or(&"").to_string(),
         WordShape::LastWord => words.last().unwrap_or(&"").to_string(),
         WordShape::DuplicateEach => {
             let mut out: Vec<&str> = Vec::with_capacity(words.len() * 2);
@@ -1174,6 +1178,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::SecondWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 2 {{\n        return \"\";\n    }}\n    return words[1];\n}}\n"
         ),
+        WordShape::ThirdWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    if words.len < 3 {{\n        return \"\";\n    }}\n    return words[2];\n}}\n"
+        ),
         WordShape::LastWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    return words[words.len - 1];\n}}\n"
         ),
@@ -1273,7 +1280,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 44] = [
+    const SHAPES: [WordShape; 45] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1293,6 +1300,7 @@ pub fn synthesize_word_program(
         WordShape::DropLast,
         WordShape::FirstWord,
         WordShape::SecondWord,
+        WordShape::ThirdWord,
         WordShape::LastWord,
         WordShape::DuplicateEach,
         WordShape::FilterLenEq2,
@@ -2320,6 +2328,34 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-hyphen_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Slash count.
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| *c == '/').count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1);\n\
+        if c == \"/\" {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-slash_count".to_string(),
                 error: None,
             });
         }
