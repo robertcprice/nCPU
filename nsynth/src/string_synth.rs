@@ -700,6 +700,12 @@ enum WordShape {
     FilterEvenLen,
     /// Keep words whose char-count is odd (order-preserving filter).
     FilterOddLen,
+    /// Keep words with length > 2.
+    FilterLenGt2,
+    /// Keep words with length < 2 (single-char / empty).
+    FilterLenLt2,
+    /// Collapse consecutive equal words (run-length of 1).
+    DedupAdjacent,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -718,6 +724,9 @@ impl WordShape {
             WordShape::Initials => "initials",
             WordShape::FilterEvenLen => "filter_even_len",
             WordShape::FilterOddLen => "filter_odd_len",
+            WordShape::FilterLenGt2 => "filter_len_gt2",
+            WordShape::FilterLenLt2 => "filter_len_lt2",
+            WordShape::DedupAdjacent => "dedup_adjacent",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -794,6 +803,27 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .copied()
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::FilterLenGt2 => words
+            .iter()
+            .filter(|w| w.chars().count() > 2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterLenLt2 => words
+            .iter()
+            .filter(|w| w.chars().count() < 2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::DedupAdjacent => {
+            let mut out: Vec<&str> = Vec::new();
+            for w in words {
+                if out.last().copied() != Some(w) {
+                    out.push(w);
+                }
+            }
+            out.join(sep)
+        }
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -840,6 +870,15 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterOddLen => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 1 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::FilterLenGt2 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len > 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterLenLt2 => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len < 2 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::DedupAdjacent => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if out.len == 0 {{\n            out.push(words[i]);\n        }} else {{\n            if words[i] != out[out.len - 1] {{\n                out.push(words[i]);\n            }}\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -870,7 +909,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 11] = [
+    const SHAPES: [WordShape; 14] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -880,6 +919,9 @@ pub fn synthesize_word_program(
         WordShape::Initials,
         WordShape::FilterEvenLen,
         WordShape::FilterOddLen,
+        WordShape::FilterLenGt2,
+        WordShape::FilterLenLt2,
+        WordShape::DedupAdjacent,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];

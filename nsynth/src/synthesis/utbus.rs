@@ -640,6 +640,8 @@ enum DualAccum {
     Range,
     /// Second-largest element (teacher cascade; ties keep first).
     SecondMax,
+    /// Second-smallest element (teacher cascade; ties keep first).
+    SecondMin,
     /// One-buy one-sell max profit (0 if none).
     StockProfit,
     /// Sum of running maxima: for each prefix, add max so far.
@@ -648,6 +650,8 @@ enum DualAccum {
     PrefixMinSum,
     /// Maximum contiguous subarray sum (Kadane).
     MaxSubarraySum,
+    /// Minimum contiguous subarray sum (Kadane dual).
+    MinSubarraySum,
 }
 
 impl DualAccum {
@@ -655,10 +659,12 @@ impl DualAccum {
         match self {
             DualAccum::Range => "range",
             DualAccum::SecondMax => "second_max",
+            DualAccum::SecondMin => "second_min",
             DualAccum::StockProfit => "stock_profit",
             DualAccum::PrefixMaxSum => "prefix_max_sum",
             DualAccum::PrefixMinSum => "prefix_min_sum",
             DualAccum::MaxSubarraySum => "max_subarray_sum",
+            DualAccum::MinSubarraySum => "min_subarray_sum",
         }
     }
 
@@ -689,6 +695,19 @@ impl DualAccum {
                         second = first;
                         first = item;
                     } else if item > second {
+                        second = item;
+                    }
+                }
+                Some(second)
+            }
+            DualAccum::SecondMin => {
+                let mut first = arr[0];
+                let mut second = arr[0];
+                for &item in arr {
+                    if item < first {
+                        second = first;
+                        first = item;
+                    } else if item < second {
                         second = item;
                     }
                 }
@@ -745,6 +764,21 @@ impl DualAccum {
                 }
                 Some(best)
             }
+            DualAccum::MinSubarraySum => {
+                let mut current = 0i64;
+                let mut best = arr[0];
+                for &item in arr {
+                    current = if current < 0 {
+                        current.saturating_add(item)
+                    } else {
+                        item
+                    };
+                    if current < best {
+                        best = current;
+                    }
+                }
+                Some(best)
+            }
         }
     }
 
@@ -775,6 +809,23 @@ impl DualAccum {
             first = item;\n\
         }} else {{\n\
             if item > second {{\n\
+                second = item;\n\
+            }}\n\
+        }}\n\
+    }}\n\
+    return second;\n\
+}}\n"
+            ),
+            DualAccum::SecondMin => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    first: i64 = arr[0];\n\
+    second: i64 = arr[0];\n\
+    for item in arr {{\n\
+        if item < first {{\n\
+            second = first;\n\
+            first = item;\n\
+        }} else {{\n\
+            if item < second {{\n\
                 second = item;\n\
             }}\n\
         }}\n\
@@ -831,6 +882,21 @@ impl DualAccum {
     return best;\n\
 }}\n"
             ),
+            DualAccum::MinSubarraySum => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    current: i64 = 0;\n\
+    best: i64 = arr[0];\n\
+    for item in arr {{\n\
+        if current < 0 {{\n\
+            current = current + item;\n\
+        }} else {{\n\
+            current = item;\n\
+        }}\n\
+        if current < best {{ best = current; }}\n\
+    }}\n\
+    return best;\n\
+}}\n"
+            ),
         }
     }
 }
@@ -844,10 +910,16 @@ enum PairwiseScan {
     CountAdjacentDiff,
     /// Count positions where `arr[i] > arr[i-1]`.
     CountIncreases,
+    /// Count positions where `arr[i] < arr[i-1]`.
+    CountDecreases,
     /// 1 if strictly increasing for all adjacent pairs, else 0.
     StrictlyIncreasing,
+    /// 1 if strictly decreasing for all adjacent pairs, else 0.
+    StrictlyDecreasing,
     /// 1 if non-decreasing (sorted ascending, ties ok), else 0.
     NonDecreasing,
+    /// 1 if non-increasing (sorted descending, ties ok), else 0.
+    NonIncreasing,
     /// Length of the longest run of equal consecutive elements.
     LongestPlateau,
     /// Sum of `|arr[i] - arr[i-1]|` over adjacent pairs.
@@ -860,8 +932,11 @@ impl PairwiseScan {
             PairwiseScan::MaxAbsDiff => "max_abs_diff",
             PairwiseScan::CountAdjacentDiff => "count_adjacent_diff",
             PairwiseScan::CountIncreases => "count_increases",
+            PairwiseScan::CountDecreases => "count_decreases",
             PairwiseScan::StrictlyIncreasing => "strictly_increasing",
+            PairwiseScan::StrictlyDecreasing => "strictly_decreasing",
             PairwiseScan::NonDecreasing => "non_decreasing",
+            PairwiseScan::NonIncreasing => "non_increasing",
             PairwiseScan::LongestPlateau => "longest_plateau",
             PairwiseScan::SumAbsDiff => "sum_abs_diff",
         }
@@ -871,13 +946,19 @@ impl PairwiseScan {
         if arr.is_empty() {
             return match self {
                 PairwiseScan::LongestPlateau => None,
-                PairwiseScan::StrictlyIncreasing | PairwiseScan::NonDecreasing => Some(1),
+                PairwiseScan::StrictlyIncreasing
+                | PairwiseScan::StrictlyDecreasing
+                | PairwiseScan::NonDecreasing
+                | PairwiseScan::NonIncreasing => Some(1),
                 _ => Some(0),
             };
         }
         if arr.len() < 2 {
             return Some(match self {
-                PairwiseScan::StrictlyIncreasing | PairwiseScan::NonDecreasing => 1,
+                PairwiseScan::StrictlyIncreasing
+                | PairwiseScan::StrictlyDecreasing
+                | PairwiseScan::NonDecreasing
+                | PairwiseScan::NonIncreasing => 1,
                 PairwiseScan::LongestPlateau => 1,
                 _ => 0,
             });
@@ -914,6 +995,15 @@ impl PairwiseScan {
                 }
                 Some(count)
             }
+            PairwiseScan::CountDecreases => {
+                let mut count = 0i64;
+                for i in 1..arr.len() {
+                    if arr[i] < arr[i - 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
             PairwiseScan::StrictlyIncreasing => {
                 for i in 1..arr.len() {
                     if arr[i] <= arr[i - 1] {
@@ -922,9 +1012,25 @@ impl PairwiseScan {
                 }
                 Some(1)
             }
+            PairwiseScan::StrictlyDecreasing => {
+                for i in 1..arr.len() {
+                    if arr[i] >= arr[i - 1] {
+                        return Some(0);
+                    }
+                }
+                Some(1)
+            }
             PairwiseScan::NonDecreasing => {
                 for i in 1..arr.len() {
                     if arr[i] < arr[i - 1] {
+                        return Some(0);
+                    }
+                }
+                Some(1)
+            }
+            PairwiseScan::NonIncreasing => {
+                for i in 1..arr.len() {
+                    if arr[i] > arr[i - 1] {
                         return Some(0);
                     }
                 }
@@ -1000,6 +1106,19 @@ impl PairwiseScan {
     return count;\n\
 }}\n"
             ),
+            PairwiseScan::CountDecreases => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] < arr[i - 1] {{\n\
+            count = count + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
             PairwiseScan::StrictlyIncreasing => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     i: i64 = 1;\n\
@@ -1012,11 +1131,35 @@ impl PairwiseScan {
     return 1;\n\
 }}\n"
             ),
+            PairwiseScan::StrictlyDecreasing => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] >= arr[i - 1] {{\n\
+            return 0;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
             PairwiseScan::NonDecreasing => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     i: i64 = 1;\n\
     while i < arr.len {{\n\
         if arr[i] < arr[i - 1] {{\n\
+            return 0;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 1;\n\
+}}\n"
+            ),
+            PairwiseScan::NonIncreasing => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] > arr[i - 1] {{\n\
             return 0;\n\
         }}\n\
         i = i + 1;\n\
@@ -1067,10 +1210,12 @@ fn try_dual_and_pairwise(
     for dual in [
         DualAccum::Range,
         DualAccum::SecondMax,
+        DualAccum::SecondMin,
         DualAccum::StockProfit,
         DualAccum::PrefixMaxSum,
         DualAccum::PrefixMinSum,
         DualAccum::MaxSubarraySum,
+        DualAccum::MinSubarraySum,
     ] {
         let ok = inputs
             .iter()
@@ -1094,8 +1239,11 @@ fn try_dual_and_pairwise(
         PairwiseScan::MaxAbsDiff,
         PairwiseScan::CountAdjacentDiff,
         PairwiseScan::CountIncreases,
+        PairwiseScan::CountDecreases,
         PairwiseScan::StrictlyIncreasing,
+        PairwiseScan::StrictlyDecreasing,
         PairwiseScan::NonDecreasing,
+        PairwiseScan::NonIncreasing,
         PairwiseScan::LongestPlateau,
         PairwiseScan::SumAbsDiff,
     ] {
@@ -1121,7 +1269,12 @@ fn try_dual_and_pairwise(
         IndexScan::SumEvenIndices,
         IndexScan::SumOddIndices,
         IndexScan::CountPeaks,
+        IndexScan::CountValleys,
         IndexScan::CountDistinct,
+        IndexScan::ArgMax,
+        IndexScan::ArgMin,
+        IndexScan::First,
+        IndexScan::Last,
     ] {
         let ok = inputs
             .iter()
@@ -1151,8 +1304,18 @@ enum IndexScan {
     SumOddIndices,
     /// Local peaks: `arr[i] > arr[i-1] && arr[i] > arr[i+1]` for interior i.
     CountPeaks,
+    /// Local valleys: `arr[i] < arr[i-1] && arr[i] < arr[i+1]` for interior i.
+    CountValleys,
     /// Number of unique values (O(n²) first-occurrence scan).
     CountDistinct,
+    /// Index of the first maximum element (empty → None).
+    ArgMax,
+    /// Index of the first minimum element (empty → None).
+    ArgMin,
+    /// First element (empty → None).
+    First,
+    /// Last element (empty → None).
+    Last,
 }
 
 impl IndexScan {
@@ -1161,7 +1324,12 @@ impl IndexScan {
             IndexScan::SumEvenIndices => "sum_even_indices",
             IndexScan::SumOddIndices => "sum_odd_indices",
             IndexScan::CountPeaks => "count_peaks",
+            IndexScan::CountValleys => "count_valleys",
             IndexScan::CountDistinct => "count_distinct",
+            IndexScan::ArgMax => "argmax",
+            IndexScan::ArgMin => "argmin",
+            IndexScan::First => "first",
+            IndexScan::Last => "last",
         }
     }
 
@@ -1197,6 +1365,18 @@ impl IndexScan {
                 }
                 Some(count)
             }
+            IndexScan::CountValleys => {
+                if arr.len() < 3 {
+                    return Some(0);
+                }
+                let mut count = 0i64;
+                for i in 1..arr.len() - 1 {
+                    if arr[i] < arr[i - 1] && arr[i] < arr[i + 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
             IndexScan::CountDistinct => {
                 let mut count = 0i64;
                 for i in 0..arr.len() {
@@ -1213,6 +1393,32 @@ impl IndexScan {
                 }
                 Some(count)
             }
+            IndexScan::ArgMax => {
+                if arr.is_empty() {
+                    return None;
+                }
+                let mut best_i = 0usize;
+                for i in 1..arr.len() {
+                    if arr[i] > arr[best_i] {
+                        best_i = i;
+                    }
+                }
+                Some(best_i as i64)
+            }
+            IndexScan::ArgMin => {
+                if arr.is_empty() {
+                    return None;
+                }
+                let mut best_i = 0usize;
+                for i in 1..arr.len() {
+                    if arr[i] < arr[best_i] {
+                        best_i = i;
+                    }
+                }
+                Some(best_i as i64)
+            }
+            IndexScan::First => arr.first().copied(),
+            IndexScan::Last => arr.last().copied(),
         }
     }
 
@@ -1255,6 +1461,21 @@ impl IndexScan {
     return count;\n\
 }}\n"
             ),
+            IndexScan::CountValleys => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i + 1 < arr.len {{\n\
+        if arr[i] < arr[i - 1] {{\n\
+            if arr[i] < arr[i + 1] {{\n\
+                count = count + 1;\n\
+            }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
             IndexScan::CountDistinct => format!(
                 "fn {fn_name}(arr: [i64]) -> i64 {{\n\
     count: i64 = 0;\n\
@@ -1276,8 +1497,183 @@ impl IndexScan {
     return count;\n\
 }}\n"
             ),
+            IndexScan::ArgMax => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best_i: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] > arr[best_i] {{\n\
+            best_i = i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best_i;\n\
+}}\n"
+            ),
+            IndexScan::ArgMin => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    best_i: i64 = 0;\n\
+    i: i64 = 1;\n\
+    while i < arr.len {{\n\
+        if arr[i] < arr[best_i] {{\n\
+            best_i = i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return best_i;\n\
+}}\n"
+            ),
+            IndexScan::First => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr[0];\n\
+}}\n"
+            ),
+            IndexScan::Last => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    return arr[arr.len - 1];\n\
+}}\n"
+            ),
         }
     }
+}
+
+/// Closed (arr, k)→i64 families that are not filter→map→reduce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KClosed {
+    /// 1-indexed: sort ascending, return `arr[k-1]`.
+    KthSmallest,
+    /// 1-indexed: sort ascending, return `arr[len-k]`.
+    KthLargest,
+    /// First index where `arr[i] == k`, else -1.
+    FirstIndexOf,
+    /// Last index where `arr[i] == k`, else -1.
+    LastIndexOf,
+}
+
+impl KClosed {
+    fn label(self) -> &'static str {
+        match self {
+            KClosed::KthSmallest => "kth_smallest",
+            KClosed::KthLargest => "kth_largest",
+            KClosed::FirstIndexOf => "first_index_of",
+            KClosed::LastIndexOf => "last_index_of",
+        }
+    }
+
+    fn eval(self, arr: &[i64], k: i64) -> Option<i64> {
+        match self {
+            KClosed::KthSmallest => {
+                if k < 1 || k as usize > arr.len() {
+                    return None;
+                }
+                let mut sorted = arr.to_vec();
+                sorted.sort_unstable();
+                Some(sorted[(k as usize) - 1])
+            }
+            KClosed::KthLargest => {
+                if k < 1 || k as usize > arr.len() {
+                    return None;
+                }
+                let mut sorted = arr.to_vec();
+                sorted.sort_unstable();
+                Some(sorted[arr.len() - (k as usize)])
+            }
+            KClosed::FirstIndexOf => {
+                for (i, &v) in arr.iter().enumerate() {
+                    if v == k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+            KClosed::LastIndexOf => {
+                for i in (0..arr.len()).rev() {
+                    if arr[i] == k {
+                        return Some(i as i64);
+                    }
+                }
+                Some(-1)
+            }
+        }
+    }
+
+    fn emit(self, fn_name: &str) -> String {
+        match self {
+            KClosed::KthSmallest => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    arr.sort();\n\
+    return arr[k - 1];\n\
+}}\n"
+            ),
+            KClosed::KthLargest => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    arr.sort();\n\
+    return arr[arr.len - k];\n\
+}}\n"
+            ),
+            KClosed::FirstIndexOf => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        if arr[i] == k {{\n\
+            return i;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
+            KClosed::LastIndexOf => format!(
+                "fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n\
+    i: i64 = arr.len - 1;\n\
+    while i >= 0 {{\n\
+        if arr[i] == k {{\n\
+            return i;\n\
+        }}\n\
+        i = i - 1;\n\
+    }}\n\
+    return 0 - 1;\n\
+}}\n"
+            ),
+        }
+    }
+}
+
+fn try_k_closed(
+    problem: &Problem,
+    fn_name: &str,
+    inputs: &[Vec<i64>],
+    ks: &[Option<i64>],
+    expected: &[i64],
+) -> Option<SolveResult> {
+    for closed in [
+        KClosed::KthSmallest,
+        KClosed::KthLargest,
+        KClosed::FirstIndexOf,
+        KClosed::LastIndexOf,
+    ] {
+        let ok = inputs
+            .iter()
+            .zip(ks.iter())
+            .zip(expected.iter())
+            .all(|((arr, k), &y)| {
+                k.and_then(|k| closed.eval(arr, k)) == Some(y)
+            });
+        if !ok {
+            continue;
+        }
+        let code = closed.emit(fn_name);
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("utbus_k_{}", closed.label()),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
+    None
 }
 
 /// Public entry point. Returns `None` unless `NSYNTH_UTBUS=1`. When enabled,
@@ -1326,6 +1722,8 @@ pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
         if let Some(hit) = try_dual_and_pairwise(problem, fn_name, &inputs, &expected) {
             return Some(hit);
         }
+    } else if let Some(hit) = try_k_closed(problem, fn_name, &inputs, &ks, &expected) {
+        return Some(hit);
     }
 
     // Keep EVERY program whose scalar outputs match the examples (cheapest
@@ -2044,10 +2442,105 @@ mod tests {
     }
 
     #[test]
+    fn utbus_solves_min_subarray_sum() {
+        let problem = array_problem(
+            "min_subarray_sum",
+            "fn min_subarray_sum(arr: [i64]) -> i64",
+            &[&[1, -2, 3, -4], &[2, 3, 4], &[-1], &[5, -10, 3]],
+            &[&[1, 2, -9], &[-2, -3]],
+            |arr| DualAccum::MinSubarraySum.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "min_subarray_sum");
+    }
+
+    #[test]
+    fn utbus_solves_count_decreases() {
+        let problem = array_problem(
+            "count_decreases",
+            "fn count_decreases(arr: [i64]) -> i64",
+            &[&[5, 3, 4, 1], &[1, 2, 3], &[9, 8, 7], &[4]],
+            &[&[3, 1, 2], &[10, 10, 9]],
+            |arr| PairwiseScan::CountDecreases.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "count_decreases");
+    }
+
+    #[test]
+    fn utbus_solves_count_valleys() {
+        let problem = array_problem(
+            "count_valleys",
+            "fn count_valleys(arr: [i64]) -> i64",
+            &[&[3, 1, 4, 0, 2], &[1, 2, 3], &[5, 1, 5], &[1]],
+            &[&[4, 1, 4, 1, 4], &[9, 2, 9]],
+            |arr| IndexScan::CountValleys.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "count_valleys");
+    }
+
+    #[test]
+    fn utbus_solves_argmax() {
+        let problem = array_problem(
+            "argmax",
+            "fn argmax(arr: [i64]) -> i64",
+            &[&[1, 5, 3], &[9], &[2, 2, 8, 2], &[-1, -5, -2]],
+            &[&[0, 1, 0], &[7, 3, 7]],
+            |arr| IndexScan::ArgMax.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "argmax");
+    }
+
+    #[test]
+    fn utbus_solves_kth_smallest() {
+        let problem = array_k_problem(
+            "kth_smallest",
+            "fn kth_smallest(arr: [i64], k: i64) -> i64",
+            &[
+                (&[3, 1, 4, 1, 5], 2, 1),
+                (&[9, 2, 7], 1, 2),
+                (&[5, 4, 3, 2, 1], 3, 3),
+                (&[10], 1, 10),
+            ],
+            &[(&[8, 1, 6], 2, 6), (&[4, 4, 4], 1, 4)],
+        );
+        assert_solves(&problem, "kth_smallest");
+    }
+
+    #[test]
+    fn utbus_solves_first_index_of() {
+        let problem = array_k_problem(
+            "first_index_of",
+            "fn first_index_of(arr: [i64], k: i64) -> i64",
+            &[
+                (&[1, 5, 3, 5], 5, 1),
+                (&[0, 0, 1], 1, 2),
+                (&[4, 4, 4], 7, -1),
+                (&[], 1, -1),
+            ],
+            &[(&[2, 3, 2], 2, 0), (&[9], 9, 0)],
+        );
+        assert_solves(&problem, "first_index_of");
+    }
+
+    #[test]
     fn index_scan_eval_helpers() {
         assert_eq!(IndexScan::SumEvenIndices.eval(&[1, 2, 3, 4]), Some(4));
         assert_eq!(IndexScan::SumOddIndices.eval(&[1, 2, 3, 4]), Some(6));
         assert_eq!(IndexScan::CountDistinct.eval(&[1, 2, 1, 3]), Some(3));
         assert_eq!(IndexScan::CountDistinct.eval(&[]), Some(0));
+        assert_eq!(IndexScan::CountValleys.eval(&[3, 1, 4, 0, 2]), Some(2));
+        assert_eq!(IndexScan::ArgMax.eval(&[1, 5, 3]), Some(1));
+        assert_eq!(IndexScan::ArgMin.eval(&[1, 5, 3]), Some(0));
+        assert_eq!(IndexScan::First.eval(&[7, 8]), Some(7));
+        assert_eq!(IndexScan::Last.eval(&[7, 8]), Some(8));
+        assert_eq!(DualAccum::MinSubarraySum.eval(&[1, -2, 3, -4]), Some(-4));
+        assert_eq!(DualAccum::SecondMin.eval(&[3, 1, 4, 1, 5]), Some(1));
+        assert_eq!(PairwiseScan::CountDecreases.eval(&[5, 3, 4, 1]), Some(2));
+        assert_eq!(PairwiseScan::StrictlyDecreasing.eval(&[5, 3, 1]), Some(1));
+        assert_eq!(PairwiseScan::NonIncreasing.eval(&[5, 5, 3]), Some(1));
+        assert_eq!(KClosed::KthSmallest.eval(&[3, 1, 4], 2), Some(3));
+        assert_eq!(KClosed::KthLargest.eval(&[3, 1, 4], 1), Some(4));
+        assert_eq!(KClosed::FirstIndexOf.eval(&[1, 5, 5], 5), Some(1));
+        assert_eq!(KClosed::LastIndexOf.eval(&[1, 5, 5], 5), Some(2));
+        assert_eq!(KClosed::FirstIndexOf.eval(&[1, 2], 9), Some(-1));
     }
 }

@@ -184,6 +184,32 @@ fn dual_max_subarray(arr: &[i64]) -> Option<i64> {
     Some(best)
 }
 
+fn dual_min_subarray(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut current = 0i64;
+    let mut best = arr[0];
+    for &item in arr {
+        current = if current < 0 { current + item } else { item };
+        if current < best { best = current; }
+    }
+    Some(best)
+}
+
+fn dual_second_min(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut first = arr[0];
+    let mut second = arr[0];
+    for &item in arr {
+        if item < first {
+            second = first;
+            first = item;
+        } else if item < second {
+            second = item;
+        }
+    }
+    Some(second)
+}
+
 fn pairwise_sum_abs_diff(arr: &[i64]) -> i64 {
     if arr.len() < 2 { return 0; }
     let mut total = 0i64;
@@ -204,12 +230,46 @@ fn index_count_peaks(arr: &[i64]) -> i64 {
     (1..arr.len() - 1).filter(|&i| arr[i] > arr[i - 1] && arr[i] > arr[i + 1]).count() as i64
 }
 
+fn index_count_valleys(arr: &[i64]) -> i64 {
+    if arr.len() < 3 { return 0; }
+    (1..arr.len() - 1).filter(|&i| arr[i] < arr[i - 1] && arr[i] < arr[i + 1]).count() as i64
+}
+
 fn index_count_distinct(arr: &[i64]) -> i64 {
     let mut count = 0i64;
     for i in 0..arr.len() {
         if !arr[..i].contains(&arr[i]) { count += 1; }
     }
     count
+}
+
+fn index_argmax(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best_i = 0usize;
+    for i in 1..arr.len() {
+        if arr[i] > arr[best_i] { best_i = i; }
+    }
+    Some(best_i as i64)
+}
+
+fn index_argmin(arr: &[i64]) -> Option<i64> {
+    if arr.is_empty() { return None; }
+    let mut best_i = 0usize;
+    for i in 1..arr.len() {
+        if arr[i] < arr[best_i] { best_i = i; }
+    }
+    Some(best_i as i64)
+}
+
+fn k_kth_smallest(arr: &[i64], k: i64) -> Option<i64> {
+    if k < 1 || k as usize > arr.len() { return None; }
+    let mut s = arr.to_vec();
+    s.sort_unstable();
+    Some(s[(k as usize) - 1])
+}
+
+fn k_first_index_of(arr: &[i64], k: i64) -> i64 {
+    arr.iter().position(|&v| v == k).map(|i| i as i64).unwrap_or(-1)
 }
 
 fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
@@ -248,9 +308,24 @@ fn pairwise_count_increases(arr: &[i64]) -> i64 {
     (1..arr.len()).filter(|&i| arr[i] > arr[i - 1]).count() as i64
 }
 
+fn pairwise_count_decreases(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 0; }
+    (1..arr.len()).filter(|&i| arr[i] < arr[i - 1]).count() as i64
+}
+
 fn pairwise_strictly_increasing(arr: &[i64]) -> i64 {
     if arr.len() < 2 { return 1; }
     if (1..arr.len()).all(|i| arr[i] > arr[i - 1]) { 1 } else { 0 }
+}
+
+fn pairwise_strictly_decreasing(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 1; }
+    if (1..arr.len()).all(|i| arr[i] < arr[i - 1]) { 1 } else { 0 }
+}
+
+fn pairwise_non_increasing(arr: &[i64]) -> i64 {
+    if arr.len() < 2 { return 1; }
+    if (1..arr.len()).all(|i| arr[i] <= arr[i - 1]) { 1 } else { 0 }
 }
 
 #[cfg(test)]
@@ -332,14 +407,22 @@ mod tests {
         assert_eq!(dual_second_max(&[3, 1, 4, 1, 5]), Some(4));
         assert_eq!(dual_second_max(&[2, 8, 3]), Some(3));
         assert_eq!(dual_second_max(&[5, 10, 8]), Some(8));
+        assert_eq!(dual_second_min(&[3, 1, 4, 1, 5]), Some(1));
         assert_eq!(dual_stock_profit(&[7, 1, 5, 3, 6, 4]), Some(5));
         assert_eq!(dual_stock_profit(&[7, 6, 4, 3, 1]), Some(0));
         assert_eq!(dual_prefix_max_sum(&[1, 3, 2, 5]), Some(12));
         assert_eq!(dual_max_subarray(&[1, -2, 3, 4, -1]), Some(7));
+        assert_eq!(dual_min_subarray(&[1, -2, 3, -4]), Some(-4));
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);
+        assert_eq!(index_count_valleys(&[3, 1, 4, 0, 2]), 2);
         assert_eq!(index_count_distinct(&[1, 2, 1, 3]), 3);
+        assert_eq!(index_argmax(&[1, 5, 3]), Some(1));
+        assert_eq!(index_argmin(&[1, 5, 3]), Some(0));
+        assert_eq!(k_kth_smallest(&[3, 1, 4, 1, 5], 2), Some(1));
+        assert_eq!(k_first_index_of(&[1, 5, 3, 5], 5), 1);
+        assert_eq!(k_first_index_of(&[1, 2], 9), -1);
         assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 
@@ -348,8 +431,12 @@ mod tests {
         assert_eq!(pairwise_max_abs_diff(&[10, 3, 8]), 7);
         assert_eq!(pairwise_count_adj_diff(&[1, 1, 2, 2, 3]), 2);
         assert_eq!(pairwise_count_increases(&[1, 3, 2, 5]), 2);
+        assert_eq!(pairwise_count_decreases(&[5, 3, 4, 1]), 2);
         assert_eq!(pairwise_strictly_increasing(&[1, 2, 4]), 1);
         assert_eq!(pairwise_strictly_increasing(&[1, 2, 2]), 0);
+        assert_eq!(pairwise_strictly_decreasing(&[5, 3, 1]), 1);
+        assert_eq!(pairwise_non_increasing(&[5, 5, 3]), 1);
+        assert_eq!(pairwise_non_increasing(&[5, 6, 3]), 0);
     }
 }
 EOF
@@ -368,6 +455,19 @@ cat > "$TMP/str_count/src/lib.rs" <<'EOF'
 fn nonempty_split_count(s: &str, sep: &str) -> i64 {
     s.split(sep).filter(|p| !p.is_empty()).count() as i64
 }
+
+fn filter_len_gt2(s: &str, sep: &str) -> String {
+    s.split(sep).filter(|w| w.chars().count() > 2).collect::<Vec<_>>().join(sep)
+}
+
+fn dedup_adjacent(s: &str, sep: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for w in s.split(sep) {
+        if out.last().copied() != Some(w) { out.push(w); }
+    }
+    out.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +476,11 @@ mod tests {
         assert_eq!(nonempty_split_count("  two words  ", " "), 2);
         assert_eq!(nonempty_split_count("hello world", " "), 2);
         assert_eq!(nonempty_split_count("a--b--c", "-"), 3);
+    }
+    #[test]
+    fn filter_and_dedup() {
+        assert_eq!(filter_len_gt2("a to the moon", " "), "the moon");
+        assert_eq!(dedup_adjacent("hi hi there there hi", " "), "hi there hi");
     }
 }
 EOF
