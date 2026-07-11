@@ -93,6 +93,45 @@ def localize_target(repo, out):
     return cand
 
 
+def _non_test_py_files(repo):
+    return [
+        p
+        for p in glob.glob(os.path.join(repo, "**", "*.py"), recursive=True)
+        if not (
+            os.path.basename(p).startswith("test_")
+            or os.path.basename(p).endswith("_test.py")
+            or os.path.basename(p) == "conftest.py"
+        )
+    ]
+
+
+def _find_def(repo, name):
+    pat = re.compile(rf"^\s*def {re.escape(name)}\s*\(", re.M)
+    for path in _non_test_py_files(repo):
+        try:
+            if pat.search(open(path, encoding="utf-8", errors="ignore").read()):
+                return os.path.relpath(path, repo)
+        except OSError:
+            continue
+    return None
+
+
+def localize_by_test_name(repo, out):
+    """The most reliable signal when it applies: the FAILING TEST's name. By the near-universal
+    `test_<fn>` convention, `test_bubble_sort` exercises `bubble_sort`. This beats scanning the assert
+    for called names, which can grab a CHECKER (`assert is_sorted(bubble_sort(x))` -> the wrong
+    `is_sorted`). Returns the production module defining `<fn>` and the fn name."""
+    for raw in re.findall(r"\btest_(\w+)", out):
+        # exact convention first, then progressively drop trailing `_words` (test_bubble_sort_stable)
+        parts = raw.split("_")
+        for k in range(len(parts), 0, -1):
+            name = "_".join(parts[:k])
+            rel = _find_def(repo, name)
+            if rel:
+                return rel, name
+    return None
+
+
 def localize_by_assert(repo, out):
     """Fallback for WRONG-VALUE bugs: an assert failure names only the test file in the traceback,
     but the failing assert's SOURCE (which pytest prints) calls the function under test. Extract the
@@ -107,23 +146,10 @@ def localize_by_assert(repo, out):
             continue
         if n not in names:
             names.append(n)
-    py_files = [
-        p
-        for p in glob.glob(os.path.join(repo, "**", "*.py"), recursive=True)
-        if not (
-            os.path.basename(p).startswith("test_")
-            or os.path.basename(p).endswith("_test.py")
-            or os.path.basename(p) == "conftest.py"
-        )
-    ]
     for name in names:
-        pat = re.compile(rf"^\s*def {re.escape(name)}\s*\(", re.M)
-        for path in py_files:
-            try:
-                if pat.search(open(path, encoding="utf-8", errors="ignore").read()):
-                    return os.path.relpath(path, repo), name
-            except OSError:
-                continue
+        rel = _find_def(repo, name)
+        if rel:
+            return rel, name
     return None
 
 
@@ -162,7 +188,14 @@ def repair(repo, target, testcmd, iters=3):
     if not target or target == "auto":
         # crash bugs: the traceback names the code file + its frame's function; wrong-value bugs:
         # fall back to the function named in the failing assert and the module that defines it.
-        loc = localize_target(repo, out) or localize_by_assert(repo, out)
+        # crash bugs: the traceback frame (file + fn). wrong-value bugs: the failing TEST name maps to
+        # the fn under test (test_bubble_sort -> bubble_sort), which beats scanning the assert for a
+        # checker name; the assert-call scan is the last resort.
+        loc = (
+            localize_target(repo, out)
+            or localize_by_test_name(repo, out)
+            or localize_by_assert(repo, out)
+        )
         if not loc:
             return False, 0, "could not localize a non-test file from the failure"
         target, fn_hint = loc
