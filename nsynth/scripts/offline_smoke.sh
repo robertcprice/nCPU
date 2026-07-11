@@ -204,6 +204,14 @@ fn index_count_peaks(arr: &[i64]) -> i64 {
     (1..arr.len() - 1).filter(|&i| arr[i] > arr[i - 1] && arr[i] > arr[i + 1]).count() as i64
 }
 
+fn index_count_distinct(arr: &[i64]) -> i64 {
+    let mut count = 0i64;
+    for i in 0..arr.len() {
+        if !arr[..i].contains(&arr[i]) { count += 1; }
+    }
+    count
+}
+
 fn pairwise_longest_plateau(arr: &[i64]) -> Option<i64> {
     if arr.is_empty() { return None; }
     let mut best = 1i64;
@@ -331,6 +339,7 @@ mod tests {
         assert_eq!(pairwise_sum_abs_diff(&[1, 4, 2]), 5);
         assert_eq!(index_sum_even(&[1, 2, 3, 4]), 4);
         assert_eq!(index_count_peaks(&[1, 3, 2, 5, 1]), 2);
+        assert_eq!(index_count_distinct(&[1, 2, 1, 3]), 3);
         assert_eq!(pairwise_longest_plateau(&[1, 1, 2, 2, 2, 1]), Some(3));
     }
 

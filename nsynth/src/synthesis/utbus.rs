@@ -1121,6 +1121,7 @@ fn try_dual_and_pairwise(
         IndexScan::SumEvenIndices,
         IndexScan::SumOddIndices,
         IndexScan::CountPeaks,
+        IndexScan::CountDistinct,
     ] {
         let ok = inputs
             .iter()
@@ -1150,6 +1151,8 @@ enum IndexScan {
     SumOddIndices,
     /// Local peaks: `arr[i] > arr[i-1] && arr[i] > arr[i+1]` for interior i.
     CountPeaks,
+    /// Number of unique values (O(n²) first-occurrence scan).
+    CountDistinct,
 }
 
 impl IndexScan {
@@ -1158,6 +1161,7 @@ impl IndexScan {
             IndexScan::SumEvenIndices => "sum_even_indices",
             IndexScan::SumOddIndices => "sum_odd_indices",
             IndexScan::CountPeaks => "count_peaks",
+            IndexScan::CountDistinct => "count_distinct",
         }
     }
 
@@ -1188,6 +1192,22 @@ impl IndexScan {
                 let mut count = 0i64;
                 for i in 1..arr.len() - 1 {
                     if arr[i] > arr[i - 1] && arr[i] > arr[i + 1] {
+                        count += 1;
+                    }
+                }
+                Some(count)
+            }
+            IndexScan::CountDistinct => {
+                let mut count = 0i64;
+                for i in 0..arr.len() {
+                    let mut seen = false;
+                    for &v in &arr[..i] {
+                        if v == arr[i] {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if !seen {
                         count += 1;
                     }
                 }
@@ -1229,6 +1249,27 @@ impl IndexScan {
             if arr[i] > arr[i + 1] {{\n\
                 count = count + 1;\n\
             }}\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return count;\n\
+}}\n"
+            ),
+            IndexScan::CountDistinct => format!(
+                "fn {fn_name}(arr: [i64]) -> i64 {{\n\
+    count: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < arr.len {{\n\
+        seen: i64 = 0;\n\
+        j: i64 = 0;\n\
+        while j < i {{\n\
+            if arr[j] == arr[i] {{\n\
+                seen = 1;\n\
+            }}\n\
+            j = j + 1;\n\
+        }}\n\
+        if seen == 0 {{\n\
+            count = count + 1;\n\
         }}\n\
         i = i + 1;\n\
     }}\n\
@@ -1988,5 +2029,25 @@ mod tests {
             |arr| IndexScan::CountPeaks.eval(arr).unwrap_or(0),
         );
         assert_solves(&problem, "count_peaks");
+    }
+
+    #[test]
+    fn utbus_solves_count_distinct() {
+        let problem = array_problem(
+            "count_distinct",
+            "fn count_distinct(arr: [i64]) -> i64",
+            &[&[1, 2, 1, 3], &[5, 5, 5], &[1, 2, 3, 4], &[]],
+            &[&[7, 8, 7], &[0, 0, 1]],
+            |arr| IndexScan::CountDistinct.eval(arr).unwrap_or(0),
+        );
+        assert_solves(&problem, "count_distinct");
+    }
+
+    #[test]
+    fn index_scan_eval_helpers() {
+        assert_eq!(IndexScan::SumEvenIndices.eval(&[1, 2, 3, 4]), Some(4));
+        assert_eq!(IndexScan::SumOddIndices.eval(&[1, 2, 3, 4]), Some(6));
+        assert_eq!(IndexScan::CountDistinct.eval(&[1, 2, 1, 3]), Some(3));
+        assert_eq!(IndexScan::CountDistinct.eval(&[]), Some(0));
     }
 }
