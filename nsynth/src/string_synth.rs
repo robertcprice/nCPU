@@ -862,6 +862,7 @@ enum WordShape {
     JoinWithDoubleArrow,
     JoinWithSpaceship,
     JoinWithHashArrow,
+    JoinWithColonArrow,
     /// Uppercase every word in place.
     UpperEachWord,
     /// Lowercase every word in place.
@@ -971,6 +972,7 @@ impl WordShape {
             WordShape::JoinWithDoubleArrow => "join_with_double_arrow",
             WordShape::JoinWithSpaceship => "join_with_spaceship",
             WordShape::JoinWithHashArrow => "join_with_hash_arrow",
+            WordShape::JoinWithColonArrow => "join_with_colon_arrow",
             WordShape::UpperEachWord => "upper_each_word",
             WordShape::LowerEachWord => "lower_each_word",
         }
@@ -1398,6 +1400,7 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
         WordShape::JoinWithDoubleArrow => words.join("=>"),
         WordShape::JoinWithSpaceship => words.join("<=>"),
         WordShape::JoinWithHashArrow => words.join("#>"),
+        WordShape::JoinWithColonArrow => words.join(":->"),
         WordShape::UpperEachWord => words
             .iter()
             .map(|w| w.to_uppercase())
@@ -1717,6 +1720,9 @@ WordShape::CapLastWord => format!(
         WordShape::JoinWithHashArrow => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\"#>\");\n}}\n"
         ),
+        WordShape::JoinWithColonArrow => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").join(\":->\");\n}}\n"
+        ),
         WordShape::UpperEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
@@ -1747,7 +1753,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 102] = [
+    const SHAPES: [WordShape; 103] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -1848,6 +1854,7 @@ pub fn synthesize_word_program(
         WordShape::JoinWithDoubleArrow,
         WordShape::JoinWithSpaceship,
         WordShape::JoinWithHashArrow,
+        WordShape::JoinWithColonArrow,
         WordShape::UpperEachWord,
         WordShape::LowerEachWord,
     ];
@@ -4476,6 +4483,45 @@ pub fn synthesize_string_int_program(
                 success: true,
                 code,
                 method: "str-us_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Hex digit count (0-9, a-f, A-F).
+    if examples
+        .iter()
+        .all(|(s, o)| s.chars().filter(|c| c.is_ascii_hexdigit()).count() as i64 == *o)
+    {
+        let code = format!(
+            "fn transform({p}: string) -> i64 {{\n\
+    n: i64 = 0;\n\
+    i: i64 = 0;\n\
+    while i < {p}.len {{\n\
+        c: string = {p}.slice(i, i + 1).lower();\n\
+        is_hex: i64 = 0;\n\
+        if c >= \"0\" {{\n\
+            if c <= \"9\" {{\n\
+                is_hex = 1;\n\
+            }}\n\
+        }}\n\
+        if c >= \"a\" {{\n\
+            if c <= \"f\" {{\n\
+                is_hex = 1;\n\
+            }}\n\
+        }}\n\
+        if is_hex == 1 {{\n\
+            n = n + 1;\n\
+        }}\n\
+        i = i + 1;\n\
+    }}\n\
+    return n;\n\
+}}\n"
+        );
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-hex_count".to_string(),
                 error: None,
             });
         }
