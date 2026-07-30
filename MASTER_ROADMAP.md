@@ -57,7 +57,11 @@ independent consensus, canonical lineage, and an in-budget run. Recomputed hashe
 semantic contradictions (failure kind/outcome, report shape, or forged evidence bindings).
 **Verified:** `agent::runtime` **15 passed / 0 failed**; `agent::provenance`
 **3 passed / 0 failed**; `agent::capability_registry` **2 passed / 0 failed**;
-`cargo check --lib` passes. Existing repository warning debt remains. **NEXT:** execute a real
+`cargo check --lib` passes. The existing process sandbox's false-timeout bug was also fixed:
+monitor cancellation and actual timeout now use separate state, capsule-sized output caps flow
+through `SandboxConfig`, and concurrent instances get distinct temp directories. Real-process
+sandbox gates pass **5 passed / 0 failed** (success, timeout, and output overflow). Existing
+repository warning debt remains. **NEXT:** execute a real
 Rust artifact through the existing sandbox under capsule policy, obtain strict provenance, emit
 the trace, and prove denial/timeout/tamper cases end-to-end before any canonical admission.
 

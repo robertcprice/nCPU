@@ -16,13 +16,26 @@
 //! # Usage
 //!
 //! ```rust
-//! use nsynth::execution::sandbox::{Sandbox, VerificationReport, Example};
+//! use nsynth::execution::sandbox::{Example, InputValue, Language, Sandbox};
 //!
-//! let sandbox = Sandbox::new();
-//! let code = r#"fn add(x: i64, y: i64) -> i64 { x + y }"#;
+//! let sandbox = Sandbox::new().unwrap();
+//! // `code` is a complete executable that reads a JSON input array from stdin
+//! // and prints one JSON-compatible result to stdout.
+//! let code = r#"
+//! use std::io::{self, Read};
+//! fn main() {
+//!     let mut input = String::new();
+//!     io::stdin().read_to_string(&mut input).unwrap();
+//!     let values: Vec<i64> = input.trim_matches(|c| c == '[' || c == ']')
+//!         .split(',').map(|v| v.trim().parse().unwrap()).collect();
+//!     println!("{}", values[0] + values[1]);
+//! }"#;
 //!
 //! let examples = vec![
-//!     Example { inputs: vec![2.into(), 3.into()], expected: 5.into() },
+//!     Example {
+//!         inputs: vec![InputValue::Int(2), InputValue::Int(3)],
+//!         expected: InputValue::Int(5),
+//!     },
 //! ];
 //!
 //! let report = sandbox.verify(code, "add", &examples, Language::Rust).unwrap();
@@ -39,7 +52,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,6 +75,7 @@ const DEFAULT_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 
 /// Maximum output size to capture (stdout + stderr)
 const MAX_OUTPUT_SIZE: usize = 10 * 1024 * 1024; // 10MB
+static NEXT_SANDBOX_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Supported programming languages for execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -359,6 +373,8 @@ pub struct SandboxConfig {
     pub timeout: Duration,
     /// Maximum memory allocation in bytes
     pub memory_limit: usize,
+    /// Maximum combined stdout and stderr bytes to capture
+    pub max_output_size: usize,
     /// Whether to enable namespace isolation (Unix only)
     pub enable_isolation: bool,
     /// Working directory for execution
@@ -372,6 +388,7 @@ impl Default for SandboxConfig {
         Self {
             timeout: DEFAULT_TIMEOUT,
             memory_limit: DEFAULT_MEMORY_LIMIT,
+            max_output_size: MAX_OUTPUT_SIZE,
             enable_isolation: true,
             working_directory: None,
             env_vars: HashMap::new(),
@@ -393,7 +410,11 @@ impl Sandbox {
 
     /// Create a new sandbox with custom configuration
     pub fn with_config(config: SandboxConfig) -> Result<Self, io::Error> {
-        let temp_dir = std::env::temp_dir().join(format!("nsynth-sandbox-{}", std::process::id()));
+        let instance_id = NEXT_SANDBOX_ID.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "nsynth-sandbox-{}-{instance_id}",
+            std::process::id()
+        ));
         fs::create_dir_all(&temp_dir)?;
 
         Ok(Self { config, temp_dir })
@@ -673,12 +694,17 @@ impl Sandbox {
         // Set up timeout monitoring
         let timeout = self.config.timeout;
         let child_id = child.id();
+        let monitor_cancelled = Arc::new(AtomicBool::new(false));
+        let monitor_cancel = monitor_cancelled.clone();
         let timed_out = Arc::new(AtomicBool::new(false));
-        let timeout_monitor = timed_out.clone();
+        let timeout_result = timed_out.clone();
 
         let timeout_thread = std::thread::spawn(move || {
             let start = Instant::now();
             while start.elapsed() < timeout {
+                if monitor_cancel.load(Ordering::SeqCst) {
+                    return;
+                }
                 std::thread::sleep(Duration::from_millis(100));
                 // Check if process is still running
                 if let Ok(Some(_)) = check_process(child_id) {
@@ -687,8 +713,11 @@ impl Sandbox {
                     return; // Process already exited
                 }
             }
+            if monitor_cancel.load(Ordering::SeqCst) {
+                return;
+            }
             // Timeout exceeded - terminate the process
-            timeout_monitor.store(true, Ordering::SeqCst);
+            timeout_result.store(true, Ordering::SeqCst);
             terminate_process(child_id);
         });
 
@@ -696,7 +725,7 @@ impl Sandbox {
         let output = child.wait_with_output();
 
         // Cancel timeout thread
-        timed_out.store(true, Ordering::SeqCst); // Signal thread to exit
+        monitor_cancelled.store(true, Ordering::SeqCst);
         let _ = timeout_thread.join();
 
         let duration = start.elapsed();
@@ -720,10 +749,10 @@ impl Sandbox {
         // Check output size limits
         let stdout_len = output.stdout.len();
         let stderr_len = output.stderr.len();
-        if stdout_len + stderr_len > MAX_OUTPUT_SIZE {
+        if stdout_len + stderr_len > self.config.max_output_size {
             return Err(SandboxError::OutputTooLarge {
                 size: stdout_len + stderr_len,
-                limit: MAX_OUTPUT_SIZE,
+                limit: self.config.max_output_size,
             });
         }
 
@@ -850,7 +879,7 @@ impl Sandbox {
     #[cfg(unix)]
     fn apply_resource_limits(&self, cmd: &mut Command) {
         // Extract values before closure to avoid lifetime issues
-        let time_limit = self.config.timeout.as_secs() as libc::rlim_t;
+        let time_limit = self.config.timeout.as_secs().max(1) as libc::rlim_t;
         let mem_limit = self.config.memory_limit as libc::rlim_t;
         let fd_limit = 256 as libc::rlim_t;
         let stack_limit = 8 * 1024 * 1024 as libc::rlim_t;
@@ -977,5 +1006,85 @@ mod tests {
         let config = SandboxConfig::default();
         assert_eq!(config.timeout, DEFAULT_TIMEOUT);
         assert_eq!(config.memory_limit, DEFAULT_MEMORY_LIMIT);
+        assert_eq!(config.max_output_size, MAX_OUTPUT_SIZE);
+    }
+
+    fn rust_sum_executable(body: &str) -> String {
+        format!(
+            r#"
+use std::io::{{self, Read}};
+fn main() {{
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+    let values: Vec<i64> = input.trim_matches(|c| c == '[' || c == ']')
+        .split(',').map(|v| v.trim().parse().unwrap()).collect();
+    {body}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn completed_execution_is_not_reported_as_timeout() {
+        let sandbox = Sandbox::new().expect("sandbox");
+        let report = sandbox
+            .verify(
+                &rust_sum_executable(r#"println!("{}", values[0] + values[1]);"#),
+                "add",
+                &[Example {
+                    inputs: vec![InputValue::Int(2), InputValue::Int(3)],
+                    expected: InputValue::Int(5),
+                }],
+                Language::Rust,
+            )
+            .expect("verification report");
+        assert!(report.all_passed(), "{report:?}");
+    }
+
+    #[test]
+    fn timeout_and_output_limits_fail_closed() {
+        let timeout_sandbox = Sandbox::with_config(SandboxConfig {
+            timeout: Duration::from_millis(200),
+            ..SandboxConfig::default()
+        })
+        .expect("sandbox");
+        let timed_out = timeout_sandbox
+            .verify(
+                "fn main() { loop {} }",
+                "loop_forever",
+                &[Example {
+                    inputs: vec![],
+                    expected: InputValue::Int(0),
+                }],
+                Language::Rust,
+            )
+            .expect("timeout is an example-level refusal");
+        assert!(!timed_out.all_passed());
+        assert!(timed_out.results[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("timed out")));
+
+        let output_sandbox = Sandbox::with_config(SandboxConfig {
+            max_output_size: 16,
+            ..SandboxConfig::default()
+        })
+        .expect("sandbox");
+        let too_large = output_sandbox
+            .verify(
+                r#"fn main() { println!("this output exceeds sixteen bytes"); }"#,
+                "too_loud",
+                &[Example {
+                    inputs: vec![],
+                    expected: InputValue::Int(0),
+                }],
+                Language::Rust,
+            )
+            .expect("output overflow is an example-level refusal");
+        assert!(!too_large.all_passed());
+        assert!(too_large.results[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("Output too large")));
     }
 }
