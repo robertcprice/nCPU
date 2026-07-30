@@ -94,9 +94,28 @@ to LinguaGenesis. **Verified:** runtime **23 passed / 0 failed** (including pers
 **3/3**); execution adapters/sandbox
 **7 passed / 0 failed**; provenance **3 passed / 0 failed**; capability registry
 **2 passed / 0 failed**; cold-cache canonical vertical **1 passed / 0 failed**;
-`cargo check --lib` passes with **438 existing warnings**. **NEXT:** implement a canonical
-LinguaGenesis admission adapter (proposal only on the nCPU side; no local capability store), then
-widen the typed harness by value shape rather than lexical cases.
+`cargo check --lib` passes with **438 existing warnings**. Existing repository warning debt
+remains.
+
+**CANONICAL USG CAPABILITY ADMISSION (2026-07-29, same branch + LinguaGenesis
+`relational-facts-emergent-reasoning` at `798bf91a`).** The proposal-only nCPU
+`CapabilityAdmission` now calls a LinguaGenesis-owned admission boundary over a
+caller-supplied canonical `lg_semantics::SemanticGraph`; nCPU still owns no
+capability graph or registry. LinguaGenesis validates the neutral request,
+requires the target entity to occur in the trace's exact sorted KVRM lineage,
+resolves every referenced entity from the live Registry, projects stable
+`kvrm:entity:<id>` nodes, and adds a verified capability Action, execution-trace
+SourceArtifact, ToolResult provenance, support/realization edges, and an
+Evidence proof. The complete candidate graph is validated before an atomic
+caller-graph replacement; missing lineage, malformed digests, invalid base
+graphs, identity collisions, and unrelated target attachment fail without
+mutation, while exact replay is idempotent. **Verified:** LinguaGenesis core
+**155 passed / 0 failed** (capability learning **3/3**); nCPU runtime
+**24 passed / 0 failed**; execution adapters/sandbox **7/7**; provenance
+**3/3**; capability registry **2/2**; cold-cache canonical vertical **1/1**;
+both crate checks pass. **NEXT:** widen the typed exact-artifact harness by
+value shape, then compose proof-bound observations into a budgeted multi-step
+tool loop.
 
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 

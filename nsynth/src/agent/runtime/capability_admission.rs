@@ -6,8 +6,15 @@
 
 use super::{ContentDigest, ExecutionTrace, TraceError, SCHEMA_VERSION};
 use crate::agent::capability_registry::{CapabilityRecord, CapabilityStatus};
+use linguigenesis_core::capability_learning::{
+    admit_verified_capability, CanonicalCapabilityAdmissionError,
+    CanonicalCapabilityAdmissionReceipt, SemanticGraph, VerifiedCapabilityAdmissionRequest,
+    CAPABILITY_ADMISSION_SCHEMA_VERSION,
+};
 use linguigenesis_core::entity::EntityId;
+use linguigenesis_core::registry::Registry;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Proof-bound proposal for admission into the canonical LinguaGenesis graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +51,13 @@ impl CapabilityAdmission {
         if !trace.admission_eligible() {
             return Err(TraceError::NotAdmissionEligible);
         }
+        if trace
+            .evidence_entity_ids
+            .binary_search(&canonical_entity_id)
+            .is_err()
+        {
+            return Err(TraceError::AdmissionTargetOutsideLineage);
+        }
         let capability_name = capability_name.into();
         let conformance_test = conformance_test.into();
         if capability_name.trim().is_empty() || conformance_test.trim().is_empty() {
@@ -72,6 +86,13 @@ impl CapabilityAdmission {
 
     pub fn validate_against(&self, trace: &ExecutionTrace) -> Result<(), TraceError> {
         trace.validate_integrity()?;
+        if trace
+            .evidence_entity_ids
+            .binary_search(&self.canonical_entity_id)
+            .is_err()
+        {
+            return Err(TraceError::AdmissionTargetOutsideLineage);
+        }
         let expected_evidence = format!("execution-trace:sha256:{}", trace.trace_digest);
         if !trace.admission_eligible()
             || self.schema_version != SCHEMA_VERSION
@@ -97,6 +118,37 @@ impl CapabilityAdmission {
         Ok(())
     }
 
+    /// Admit this already trace-validated proposal through the LinguaGenesis
+    /// canonical-USG boundary. The graph remains caller-owned; nCPU does not
+    /// create or retain a capability registry.
+    pub fn admit_into_canonical_graph(
+        &self,
+        trace: &ExecutionTrace,
+        registry: &Registry,
+        graph: &mut SemanticGraph,
+    ) -> Result<CanonicalCapabilityAdmissionReceipt, CapabilityGraphAdmissionError> {
+        self.validate_against(trace)
+            .map_err(CapabilityGraphAdmissionError::Trace)?;
+        let request = VerifiedCapabilityAdmissionRequest {
+            schema_version: CAPABILITY_ADMISSION_SCHEMA_VERSION,
+            canonical_entity_id: self.canonical_entity_id,
+            run_id: self.run_id.0.clone(),
+            verification_trace_digest: self.verification_trace_digest.to_string(),
+            artifact_digest: self.artifact_digest.to_string(),
+            evidence_entity_ids: self.evidence_entity_ids.clone(),
+            capability_name: self.record.name.clone(),
+            conformance_test: self
+                .record
+                .conformance_test
+                .clone()
+                .ok_or(TraceError::AdmissionInvariant)
+                .map_err(CapabilityGraphAdmissionError::Trace)?,
+            proposal_digest: self.admission_digest.to_string(),
+        };
+        admit_verified_capability(registry, graph, &request)
+            .map_err(CapabilityGraphAdmissionError::Canonical)
+    }
+
     #[cfg(test)]
     pub(super) fn recompute_digest_for_test(&self) -> Result<ContentDigest, TraceError> {
         self.recompute_digest()
@@ -117,3 +169,20 @@ impl CapabilityAdmission {
         Ok(ContentDigest::sha256(&bytes))
     }
 }
+
+#[derive(Debug)]
+pub enum CapabilityGraphAdmissionError {
+    Trace(TraceError),
+    Canonical(CanonicalCapabilityAdmissionError),
+}
+
+impl fmt::Display for CapabilityGraphAdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Trace(error) => write!(formatter, "invalid nCPU capability proposal: {error}"),
+            Self::Canonical(error) => write!(formatter, "LinguaGenesis admission failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for CapabilityGraphAdmissionError {}

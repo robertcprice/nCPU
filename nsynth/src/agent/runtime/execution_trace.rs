@@ -373,6 +373,7 @@ pub enum TraceError {
     ProvenanceOnRefutedTrace,
     OutcomeInvariant,
     NotAdmissionEligible,
+    AdmissionTargetOutsideLineage,
     AdmissionInvariant,
     TraceCapsuleMismatch,
     DigestMismatch,
@@ -427,6 +428,9 @@ impl fmt::Display for TraceError {
             Self::OutcomeInvariant => formatter.write_str("trace outcome fields are inconsistent"),
             Self::NotAdmissionEligible => {
                 formatter.write_str("trace does not satisfy canonical admission evidence")
+            }
+            Self::AdmissionTargetOutsideLineage => {
+                formatter.write_str("capability target is outside the trace evidence lineage")
             }
             Self::AdmissionInvariant => {
                 formatter.write_str("capability admission does not match its trace")
@@ -686,8 +690,12 @@ mod tests {
             vec![],
         )
         .expect("trace");
+        assert!(matches!(
+            CapabilityAdmission::from_verified_trace(&trace, 99, "add", "add_conformance"),
+            Err(TraceError::AdmissionTargetOutsideLineage)
+        ));
         let mut admission =
-            CapabilityAdmission::from_verified_trace(&trace, 99, "add", "add_conformance")
+            CapabilityAdmission::from_verified_trace(&trace, 11, "add", "add_conformance")
                 .expect("admission");
         admission.validate_against(&trace).expect("bound admission");
         assert_eq!(admission.record.status, CapabilityStatus::Verified);
@@ -695,7 +703,7 @@ mod tests {
         admission.canonical_entity_id = 100;
         assert!(matches!(
             admission.validate_against(&trace),
-            Err(TraceError::AdmissionDigestMismatch)
+            Err(TraceError::AdmissionTargetOutsideLineage)
         ));
 
         let mut tampered_trace = trace;
@@ -735,7 +743,7 @@ mod tests {
         )
         .expect("trace");
         let mut admission =
-            CapabilityAdmission::from_verified_trace(&trace, 99, "add", "add_conformance")
+            CapabilityAdmission::from_verified_trace(&trace, 11, "add", "add_conformance")
                 .expect("admission");
         admission.record.evidence = "execution-trace:sha256:forged".into();
         admission.admission_digest = admission.recompute_digest_for_test().expect("digest");

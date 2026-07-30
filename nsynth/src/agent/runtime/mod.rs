@@ -11,7 +11,7 @@ mod execution_trace;
 mod state_machine;
 
 pub use budget::{AgentRunBudget, BudgetExhausted};
-pub use capability_admission::CapabilityAdmission;
+pub use capability_admission::{CapabilityAdmission, CapabilityGraphAdmissionError};
 pub use capsule_executor::{CapsuleExecutor, SANDBOX_EXECUTION_CAPABILITY};
 pub use code_task_spec::CodeTaskSpec;
 pub use content_digest::ContentDigest;

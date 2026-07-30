@@ -318,13 +318,18 @@ fn record_wall(budget: &mut AgentRunBudget, initial_wall_ms: u64, started: Insta
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CodeTaskSpec, ExecutableArtifact, ExecutionPolicy, ExecutionTraceOutcome};
+    use super::super::{
+        CapabilityAdmission, CodeTaskSpec, ExecutableArtifact, ExecutionPolicy,
+        ExecutionTraceOutcome,
+    };
     use super::*;
     use crate::agent::coding_intent::CodingIntent;
     use crate::benchmark::HoldoutSource;
     use crate::benchmark::{Example as BenchmarkExample, Value};
     use crate::linguigenesis_bridge::LinguigenesisBridge;
-    use linguigenesis_core::entity::EntityId;
+    use linguigenesis_core::capability_learning::{GraphId, SchemaVersion, SemanticGraph};
+    use linguigenesis_core::entity::{Entity, EntityId, EntityType};
+    use linguigenesis_core::registry::Registry;
 
     fn benchmark_example(input: i64, expected: i64) -> BenchmarkExample {
         BenchmarkExample {
@@ -396,6 +401,37 @@ mod tests {
             .as_ref()
             .is_some_and(|r| r.all_passed() && r.total > 0));
         assert!(trace.admission_eligible(), "{trace:#?}");
+    }
+
+    #[test]
+    fn verified_trace_admits_into_the_caller_owned_canonical_graph() {
+        let problem = square_problem();
+        let trace = CapsuleExecutor::execute(&capsule(&problem, true), &problem).expect("trace");
+        let admission =
+            CapabilityAdmission::from_verified_trace(&trace, 17, "square", "square_conformance")
+                .expect("proposal");
+
+        let registry = Registry::new();
+        registry
+            .add_entity(Entity::new(17, "square".into(), EntityType::Function))
+            .expect("canonical entity");
+        let mut graph = SemanticGraph::new(
+            GraphId::new("canonical:ncpu-capability-test"),
+            SchemaVersion::new("usg-0.1.0"),
+        );
+        let receipt = admission
+            .admit_into_canonical_graph(&trace, &registry, &mut graph)
+            .expect("canonical admission");
+        assert!(receipt.graph_changed);
+        assert!(graph
+            .nodes
+            .keys()
+            .any(|node_id| node_id.as_str() == receipt.capability_node_id));
+
+        let replay = admission
+            .admit_into_canonical_graph(&trace, &registry, &mut graph)
+            .expect("idempotent canonical admission");
+        assert!(!replay.graph_changed);
     }
 
     #[test]
