@@ -311,6 +311,26 @@ impl ExecutionTrace {
         Ok(())
     }
 
+    /// Re-bind a standalone trace to the exact capsule it claims to report.
+    /// This is the load/persistence boundary: a valid trace digest alone is not
+    /// enough if it was paired with a different task, artifact, or policy.
+    pub fn validate_against_capsule(&self, capsule: &ExecutionCapsule) -> Result<(), TraceError> {
+        capsule.validate_integrity().map_err(TraceError::Capsule)?;
+        self.validate_integrity()?;
+        if self.run_id != capsule.run_id
+            || self.capsule_digest != capsule.capsule_digest
+            || self.artifact_digest != capsule.artifact.source_digest
+            || self.evidence_entity_ids != capsule.artifact.evidence_entity_ids
+        {
+            return Err(TraceError::TraceCapsuleMismatch);
+        }
+        validate_used_capabilities(capsule, &self.used_capabilities)?;
+        if let Some(report) = &self.verification {
+            validate_report_shape(capsule, report)?;
+        }
+        Ok(())
+    }
+
     pub fn recompute_digest(&self) -> Result<ContentDigest, TraceError> {
         let payload = TracePayload {
             schema_version: self.schema_version,
@@ -354,6 +374,7 @@ pub enum TraceError {
     OutcomeInvariant,
     NotAdmissionEligible,
     AdmissionInvariant,
+    TraceCapsuleMismatch,
     DigestMismatch,
     AdmissionDigestMismatch,
     Encoding(String),
@@ -409,6 +430,9 @@ impl fmt::Display for TraceError {
             }
             Self::AdmissionInvariant => {
                 formatter.write_str("capability admission does not match its trace")
+            }
+            Self::TraceCapsuleMismatch => {
+                formatter.write_str("execution trace does not match its capsule")
             }
             Self::DigestMismatch => formatter.write_str("trace digest mismatch"),
             Self::AdmissionDigestMismatch => formatter.write_str("admission digest mismatch"),

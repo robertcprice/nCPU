@@ -6,6 +6,7 @@ mod capsule_executor;
 mod code_task_spec;
 mod content_digest;
 mod execution_capsule;
+mod execution_evidence_persistence;
 mod execution_trace;
 mod state_machine;
 
@@ -15,6 +16,10 @@ pub use capsule_executor::{CapsuleExecutor, SANDBOX_EXECUTION_CAPABILITY};
 pub use code_task_spec::CodeTaskSpec;
 pub use content_digest::ContentDigest;
 pub use execution_capsule::{CapsuleError, ExecutableArtifact, ExecutionCapsule, ExecutionPolicy};
+pub use execution_evidence_persistence::{
+    execution_evidence_dir, execution_evidence_path, load_execution_evidence,
+    save_execution_evidence, EvidencePersistenceError, ExecutionEvidenceBundle,
+};
 pub use execution_trace::{
     ExecutionFailure, ExecutionFailureKind, ExecutionTrace, ExecutionTraceOutcome, TraceError,
 };

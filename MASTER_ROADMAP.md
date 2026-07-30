@@ -79,9 +79,24 @@ Evaluator substitution, policy denial, compilation failure, timeout, output over
 exhaustion, semantic/digest tampering, and unsupported interfaces all fail closed without text
 matching. **Verified:** runtime **20 passed / 0 failed**; execution adapters/sandbox
 **7 passed / 0 failed**; provenance **3 passed / 0 failed**; capability registry
-**2 passed / 0 failed**; `cargo check --lib` passes. **NEXT:** add durable atomic trace/capsule
-persistence and a canonical LinguaGenesis admission adapter (proposal only; no nCPU knowledge
-store), then widen the typed harness by value shape rather than lexical cases.
+**2 passed / 0 failed**; `cargo check --lib` passes.
+
+**DURABLE EXECUTION EVIDENCE (2026-07-29, same branch).** An
+`ExecutionEvidenceBundle` now validates that a trace belongs to its originating capsule before
+persisting either: run ID, capsule digest, artifact digest, canonical entity lineage, used-policy
+subset, and visible report shape must agree. Valid bundles are stored as content-addressed JSON
+under `.nsynth/execution-evidence`, using a unique temporary file, Unix mode `0600`, file and
+directory synchronization, and atomic no-replace hard-link publication. Repeat saves are
+idempotent; corruption, capsule/trace mismatch, a false digest filename, a non-regular target,
+and a different payload at an existing digest all fail closed. This directory is explicitly
+execution audit evidence, not a knowledge or capability store; canonical admission still belongs
+to LinguaGenesis. **Verified:** runtime **23 passed / 0 failed** (including persistence
+**3/3**); execution adapters/sandbox
+**7 passed / 0 failed**; provenance **3 passed / 0 failed**; capability registry
+**2 passed / 0 failed**; cold-cache canonical vertical **1 passed / 0 failed**;
+`cargo check --lib` passes with **438 existing warnings**. **NEXT:** implement a canonical
+LinguaGenesis admission adapter (proposal only on the nCPU side; no local capability store), then
+widen the typed harness by value shape rather than lexical cases.
 
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 
