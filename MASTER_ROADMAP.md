@@ -167,6 +167,35 @@ the unchanged capability-admission policy. **Verified:** cross-runtime vertical
 content-bound observations into a budgeted multi-step tool loop whose every
 transition and final capability claim is independently replayable.
 
+**PROOF-BOUND MULTI-STEP TOOL EXECUTION (2026-07-29, same branch).** A modular
+`tool_execution_chain/` runtime now executes caller-grounded plans whose later
+arguments are structurally bound to literal values, prior tool content, or
+prior tool metadata. Step IDs form a forward-only dependency graph; future,
+self, missing, and failed-observation dependencies cannot resolve. Plans bind
+the run ID, sorted canonical LinguaGenesis entity lineage, exact capability and
+resource policy, ordered steps, and a SHA-256 digest. Each real
+`SecureToolRuntime` invocation emits a typed, content-addressed observation
+containing resolved arguments, dependency observation digests, output or
+machine-readable failure, and duration. The final chain binds every observation,
+outcome, consumed attempt/wall budget, used-capability set, and lineage; replay
+re-resolves all arguments from prior outputs and detects result, dependency,
+policy, order, or digest tampering. A real four-step filesystem test reads a
+seed, writes the observed content, feeds the write tool's observed `bytes`
+metadata into a later write, and re-reads the copy. Runtime denial and attempt
+exhaustion stop later side effects; future dependencies and capabilities outside
+policy are refused before execution. This is an audit/execution substrate, not a
+second knowledge graph or capability store. **Verified:** tool-chain **3/3**;
+runtime **29/29**; existing tool runtime **37/37**; cross-runtime typed vertical
+**1/1**; consensus **5/5**; provenance **3/3**; capability registry **2/2**;
+cold-cache canonical vertical **1/1**; `cargo check --lib` passes with **438
+existing warnings**. **HONEST LIMITS:** the plan is currently supplied as typed
+data—it is not yet induced autonomously from the canonical USG—and synchronous
+external tool calls are measured against timeout policy after return, not
+hard-cancelled in flight. Do not claim autonomous planning or hard timeout
+safety yet. **NEXT:** derive candidate step graphs from canonical semantic
+relations and verified capability contracts, then add cancellable
+subprocess/network execution before admitting a multi-step capability.
+
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 
 **★★★ PATH TO WHOLE-SOFTWARE SYNTHESIS — AUTHORITATIVE PLAN (2026-07-09, user-directed "how do we get to programming entire software"). This is the top-level agent-axis roadmap; the U-phases/UTBUS below remain the SYNTHESIS-ENGINE substrate this rides on.**

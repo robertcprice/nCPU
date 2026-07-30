@@ -9,6 +9,7 @@ mod execution_capsule;
 mod execution_evidence_persistence;
 mod execution_trace;
 mod state_machine;
+mod tool_execution_chain;
 
 pub use budget::{AgentRunBudget, BudgetExhausted};
 pub use capability_admission::{CapabilityAdmission, CapabilityGraphAdmissionError};
@@ -25,4 +26,9 @@ pub use execution_trace::{
 };
 pub use state_machine::{
     legal_transition, transition, AgentRunEvent, AgentRunId, AgentRunStatus, SCHEMA_VERSION,
+};
+pub use tool_execution_chain::{
+    ObservedToolFailure, ObservedToolFailureKind, ObservedToolOutput, ToolArgumentBinding,
+    ToolChainError, ToolChainExecutor, ToolChainOutcome, ToolExecutionChain, ToolExecutionPlan,
+    ToolExecutionPolicy, ToolPlanError, ToolStepObservation, ToolStepResult, ToolStepSpec,
 };
