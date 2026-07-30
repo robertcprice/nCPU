@@ -215,7 +215,7 @@ impl Value {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Example {
     pub inputs: Vec<Value>,
     pub expected: Value,
@@ -300,7 +300,7 @@ pub fn value_as_f64(v: &Value) -> Option<f64> {
 }
 
 /// Definition of a single function within a multi-function program.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FunctionDef {
     pub name: String,
     pub signature: String,

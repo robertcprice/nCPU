@@ -7,9 +7,10 @@
 //! - Detailed error capture and reporting
 //! - Security isolation features
 
+mod rust_function_harness;
 pub mod sandbox;
 
 pub use sandbox::{
     Example, ExecutionMetrics, ExecutionResult, InputValue, Language, Sandbox, SandboxConfig,
-    SandboxError, VerificationReport,
+    SandboxError, SandboxFailureKind, VerificationReport,
 };

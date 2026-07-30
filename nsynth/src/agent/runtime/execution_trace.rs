@@ -37,6 +37,7 @@ pub enum ExecutionFailureKind {
     Verification,
     BudgetExhausted,
     PolicyDenied,
+    UnsupportedInterface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +65,7 @@ pub struct ExecutionTrace {
     pub evidence_entity_ids: Vec<EntityId>,
     pub outcome: ExecutionTraceOutcome,
     pub verification: Option<VerificationReport>,
+    pub generalization_verification: Option<VerificationReport>,
     pub provenance: Option<ProvenanceCertificate>,
     pub failure: Option<ExecutionFailure>,
     pub budget_after: AgentRunBudget,
@@ -80,6 +82,7 @@ struct TracePayload<'a> {
     evidence_entity_ids: &'a [EntityId],
     outcome: ExecutionTraceOutcome,
     verification: &'a Option<VerificationReport>,
+    generalization_verification: &'a Option<VerificationReport>,
     provenance: &'a Option<ProvenanceCertificate>,
     failure: &'a Option<ExecutionFailure>,
     budget_after: &'a AgentRunBudget,
@@ -92,6 +95,7 @@ impl ExecutionTrace {
     pub fn from_report(
         capsule: &ExecutionCapsule,
         verification: VerificationReport,
+        generalization_verification: Option<VerificationReport>,
         provenance: Option<ProvenanceCertificate>,
         budget_after: AgentRunBudget,
         mut used_capabilities: Vec<String>,
@@ -100,14 +104,27 @@ impl ExecutionTrace {
         canonicalize_capabilities(&mut used_capabilities);
         validate_used_capabilities(capsule, &used_capabilities)?;
         validate_report_shape(capsule, &verification)?;
+        if let Some(report) = &generalization_verification {
+            validate_trace_report_shape(report)?;
+        }
 
-        let outcome = if verification.all_passed() {
+        let all_passed = verification.all_passed()
+            && generalization_verification
+                .as_ref()
+                .map_or(true, VerificationReport::all_passed);
+        let outcome = if all_passed {
             let certificate = provenance.as_ref().ok_or(TraceError::MissingProvenance)?;
             if certificate.method != capsule.artifact.synthesis_method {
                 return Err(TraceError::ProvenanceMethodMismatch);
             }
             if certificate.n_examples != verification.total {
                 return Err(TraceError::ProvenanceExampleMismatch);
+            }
+            let executed_holdouts = generalization_verification
+                .as_ref()
+                .map_or(0, |report| report.total);
+            if certificate.n_holdouts != executed_holdouts {
+                return Err(TraceError::ProvenanceHoldoutMismatch);
             }
             ExecutionTraceOutcome::Verified
         } else {
@@ -125,6 +142,7 @@ impl ExecutionTrace {
             evidence_entity_ids: capsule.artifact.evidence_entity_ids.clone(),
             outcome,
             verification: Some(verification),
+            generalization_verification,
             provenance,
             failure: None,
             budget_after,
@@ -162,6 +180,7 @@ impl ExecutionTrace {
             evidence_entity_ids: capsule.artifact.evidence_entity_ids.clone(),
             outcome,
             verification: None,
+            generalization_verification: None,
             provenance: None,
             failure: Some(failure),
             budget_after,
@@ -175,7 +194,8 @@ impl ExecutionTrace {
 
     /// Strong admission boundary, deliberately narrower than "tests passed."
     pub fn admission_eligible(&self) -> bool {
-        if self.outcome != ExecutionTraceOutcome::Verified
+        if self.validate_integrity().is_err()
+            || self.outcome != ExecutionTraceOutcome::Verified
             || self.evidence_entity_ids.is_empty()
             || !budget_within_limits(&self.budget_after)
         {
@@ -184,8 +204,16 @@ impl ExecutionTrace {
         self.verification
             .as_ref()
             .is_some_and(VerificationReport::all_passed)
+            && self
+                .generalization_verification
+                .as_ref()
+                .is_some_and(VerificationReport::all_passed)
             && self.provenance.as_ref().is_some_and(|certificate| {
                 certificate.n_holdouts > 0
+                    && self
+                        .generalization_verification
+                        .as_ref()
+                        .is_some_and(|report| report.total == certificate.n_holdouts)
                     && certificate.holdout_source == HoldoutSource::Generated
                     && matches!(
                         certificate.consensus,
@@ -210,6 +238,9 @@ impl ExecutionTrace {
         {
             return Err(TraceError::NonCanonicalCollections);
         }
+        if !self.capsule_digest.is_well_formed() || !self.artifact_digest.is_well_formed() {
+            return Err(TraceError::DigestMismatch);
+        }
         match self.outcome {
             ExecutionTraceOutcome::Verified => {
                 let report = self
@@ -227,22 +258,44 @@ impl ExecutionTrace {
                     return Err(TraceError::OutcomeInvariant);
                 }
                 validate_trace_report_shape(report)?;
+                let generalization = self
+                    .generalization_verification
+                    .as_ref()
+                    .ok_or(TraceError::MissingGeneralizationVerification)?;
+                validate_trace_report_shape(generalization)?;
+                if !generalization.all_passed()
+                    || generalization.total == 0
+                    || certificate.n_holdouts != generalization.total
+                {
+                    return Err(TraceError::OutcomeInvariant);
+                }
             }
             ExecutionTraceOutcome::Refuted => {
                 let report = self
                     .verification
                     .as_ref()
                     .ok_or(TraceError::MissingVerification)?;
-                if report.all_passed() || self.provenance.is_some() || self.failure.is_some() {
+                if (report.all_passed()
+                    && self
+                        .generalization_verification
+                        .as_ref()
+                        .map_or(true, VerificationReport::all_passed))
+                    || self.provenance.is_some()
+                    || self.failure.is_some()
+                {
                     return Err(TraceError::OutcomeInvariant);
                 }
                 validate_trace_report_shape(report)?;
+                if let Some(generalization) = &self.generalization_verification {
+                    validate_trace_report_shape(generalization)?;
+                }
             }
             outcome @ (ExecutionTraceOutcome::ExecutionFailed
             | ExecutionTraceOutcome::BudgetExhausted
             | ExecutionTraceOutcome::PolicyDenied) => {
                 let failure = self.failure.as_ref().ok_or(TraceError::OutcomeInvariant)?;
                 if self.verification.is_some()
+                    || self.generalization_verification.is_some()
                     || self.provenance.is_some()
                     || failure.message.trim().is_empty()
                     || !failure_matches_outcome(failure.kind, outcome)
@@ -267,6 +320,7 @@ impl ExecutionTrace {
             evidence_entity_ids: &self.evidence_entity_ids,
             outcome: self.outcome,
             verification: &self.verification,
+            generalization_verification: &self.generalization_verification,
             provenance: &self.provenance,
             failure: &self.failure,
             budget_after: &self.budget_after,
@@ -285,13 +339,17 @@ pub enum TraceError {
     EmptyRunId,
     EmptyFailure,
     EmptyAdmissionField,
+    EvaluatorMismatch(String),
+    UnsupportedEvaluatorValue,
     NonCanonicalCollections,
     CapabilityOutsidePolicy(String),
     ReportShape,
     MissingVerification,
+    MissingGeneralizationVerification,
     MissingProvenance,
     ProvenanceMethodMismatch,
     ProvenanceExampleMismatch,
+    ProvenanceHoldoutMismatch,
     ProvenanceOnRefutedTrace,
     OutcomeInvariant,
     NotAdmissionEligible,
@@ -314,6 +372,10 @@ impl fmt::Display for TraceError {
             Self::EmptyRunId => formatter.write_str("trace run ID is empty"),
             Self::EmptyFailure => formatter.write_str("execution failure message is empty"),
             Self::EmptyAdmissionField => formatter.write_str("capability admission field is empty"),
+            Self::EvaluatorMismatch(reason) => write!(formatter, "evaluator mismatch: {reason}"),
+            Self::UnsupportedEvaluatorValue => {
+                formatter.write_str("evaluator value is unsupported by the typed sandbox")
+            }
             Self::NonCanonicalCollections => {
                 formatter.write_str("trace collections are not sorted and unique")
             }
@@ -325,12 +387,18 @@ impl fmt::Display for TraceError {
             }
             Self::ReportShape => formatter.write_str("verification report shape is inconsistent"),
             Self::MissingVerification => formatter.write_str("verification report is missing"),
+            Self::MissingGeneralizationVerification => {
+                formatter.write_str("passing trace lacks exact-artifact holdout execution")
+            }
             Self::MissingProvenance => formatter.write_str("passing report lacks provenance"),
             Self::ProvenanceMethodMismatch => {
                 formatter.write_str("provenance method does not match the artifact")
             }
             Self::ProvenanceExampleMismatch => {
                 formatter.write_str("provenance and sandbox example counts differ")
+            }
+            Self::ProvenanceHoldoutMismatch => {
+                formatter.write_str("provenance and sandbox holdout counts differ")
             }
             Self::ProvenanceOnRefutedTrace => {
                 formatter.write_str("refuted trace cannot carry verified provenance")
@@ -366,12 +434,17 @@ fn validate_trace_report_shape(report: &VerificationReport) -> Result<(), TraceE
     if report.results.len() != report.total
         || report.metrics.examples_executed != report.total
         || report.passed > report.total
+        || report.passed != report.results.iter().filter(|result| result.passed).count()
         || report.success != (report.passed == report.total)
         || report
             .results
             .iter()
             .enumerate()
             .any(|(index, result)| result.index != index)
+        || report.results.iter().any(|result| {
+            result.failure_kind.is_some()
+                && (result.passed || result.actual.is_some() || result.error.is_none())
+        })
     {
         return Err(TraceError::ReportShape);
     }
@@ -426,6 +499,23 @@ mod tests {
     use crate::execution::sandbox::ExampleResult;
     use crate::execution::{Example, ExecutionMetrics, InputValue, Language, VerificationReport};
 
+    fn evaluator() -> crate::benchmark::Problem {
+        crate::benchmark::Problem {
+            name: "add".into(),
+            category: "arithmetic",
+            description: "add two numbers",
+            signature: "fn add(a: i64, b: i64) -> i64",
+            examples: vec![crate::benchmark::Example {
+                inputs: vec![
+                    crate::benchmark::Value::Int(2),
+                    crate::benchmark::Value::Int(3),
+                ],
+                expected: crate::benchmark::Value::Int(5),
+            }],
+            ..Default::default()
+        }
+    }
+
     fn capsule() -> ExecutionCapsule {
         let intent = CodingIntent::from_nl("add two numbers").expect("intent");
         let task = CodeTaskSpec::from_nl(
@@ -445,6 +535,7 @@ mod tests {
                 "inductive-solver",
                 vec![11],
             ),
+            &evaluator(),
             vec![Example {
                 inputs: vec![InputValue::Int(2), InputValue::Int(3)],
                 expected: InputValue::Int(5),
@@ -455,21 +546,28 @@ mod tests {
     }
 
     fn report(success: bool) -> VerificationReport {
+        report_n(success, 1)
+    }
+
+    fn report_n(success: bool, total: usize) -> VerificationReport {
         VerificationReport {
             success,
-            total: 1,
-            passed: usize::from(success),
-            results: vec![ExampleResult {
-                index: 0,
-                passed: success,
-                actual: Some(InputValue::Int(if success { 5 } else { 6 })),
-                expected: InputValue::Int(5),
-                error: (!success).then(|| "mismatch".into()),
-                duration_ms: 1,
-            }],
+            total,
+            passed: if success { total } else { 0 },
+            results: (0..total)
+                .map(|index| ExampleResult {
+                    index,
+                    passed: success,
+                    actual: Some(InputValue::Int(if success { 5 } else { 6 })),
+                    expected: InputValue::Int(5),
+                    error: (!success).then(|| "mismatch".into()),
+                    failure_kind: None,
+                    duration_ms: 1,
+                })
+                .collect(),
             metrics: ExecutionMetrics {
                 total_duration_ms: 1,
-                examples_executed: 1,
+                examples_executed: total,
                 ..Default::default()
             },
         }
@@ -490,6 +588,7 @@ mod tests {
         let trace = ExecutionTrace::from_report(
             &capsule(),
             report(true),
+            Some(report_n(true, 8)),
             Some(certificate(ConsensusVerdict::Verified {
                 agreeing: 1,
                 probes: 8,
@@ -510,6 +609,7 @@ mod tests {
         let trace = ExecutionTrace::from_report(
             &capsule(),
             report(true),
+            Some(report_n(true, 8)),
             Some(certificate(ConsensusVerdict::NoConsensus)),
             AgentRunBudget::default(),
             vec![],
@@ -528,6 +628,7 @@ mod tests {
         let refuted = ExecutionTrace::from_report(
             &capsule(),
             report(false),
+            None,
             None,
             AgentRunBudget::default(),
             vec![],
@@ -552,6 +653,7 @@ mod tests {
         let trace = ExecutionTrace::from_report(
             &capsule(),
             report(true),
+            Some(report_n(true, 8)),
             Some(certificate(ConsensusVerdict::Verified {
                 agreeing: 2,
                 probes: 8,
@@ -599,6 +701,7 @@ mod tests {
         let trace = ExecutionTrace::from_report(
             &capsule(),
             report(true),
+            Some(report_n(true, 8)),
             Some(certificate(ConsensusVerdict::Verified {
                 agreeing: 2,
                 probes: 8,

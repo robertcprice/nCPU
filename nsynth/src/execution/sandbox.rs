@@ -129,7 +129,7 @@ impl Language {
 }
 
 /// A single test case for verification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Example {
     /// Input values to pass to the function
     pub inputs: Vec<InputValue>,
@@ -233,6 +233,9 @@ pub struct ExampleResult {
     pub expected: InputValue,
     /// Error message (if execution failed or output mismatched)
     pub error: Option<String>,
+    /// Machine-readable execution failure class; semantic mismatches have none.
+    #[serde(default)]
+    pub failure_kind: Option<SandboxFailureKind>,
     /// Execution time for this example
     pub duration_ms: u64,
 }
@@ -288,6 +291,39 @@ pub enum SandboxError {
     SecurityViolation { operation: String },
     /// Output too large to capture
     OutputTooLarge { size: usize, limit: usize },
+    /// A bare-function interface cannot be represented by the typed harness.
+    UnsupportedFunctionInterface { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SandboxFailureKind {
+    Compilation,
+    Timeout,
+    MemoryLimit,
+    Runtime,
+    Signal,
+    Io,
+    RuntimeUnavailable,
+    Security,
+    OutputLimit,
+    UnsupportedInterface,
+}
+
+impl SandboxError {
+    pub fn kind(&self) -> SandboxFailureKind {
+        match self {
+            Self::CompilationFailed { .. } => SandboxFailureKind::Compilation,
+            Self::Timeout { .. } => SandboxFailureKind::Timeout,
+            Self::MemoryLimitExceeded { .. } => SandboxFailureKind::MemoryLimit,
+            Self::RuntimePanic { .. } => SandboxFailureKind::Runtime,
+            Self::Signal { .. } => SandboxFailureKind::Signal,
+            Self::IoError { .. } => SandboxFailureKind::Io,
+            Self::RuntimeUnavailable { .. } => SandboxFailureKind::RuntimeUnavailable,
+            Self::SecurityViolation { .. } => SandboxFailureKind::Security,
+            Self::OutputTooLarge { .. } => SandboxFailureKind::OutputLimit,
+            Self::UnsupportedFunctionInterface { .. } => SandboxFailureKind::UnsupportedInterface,
+        }
+    }
 }
 
 impl fmt::Display for SandboxError {
@@ -334,6 +370,9 @@ impl fmt::Display for SandboxError {
             }
             SandboxError::OutputTooLarge { size, limit } => {
                 write!(f, "Output too large: {} bytes (limit: {})", size, limit)
+            }
+            SandboxError::UnsupportedFunctionInterface { reason } => {
+                write!(f, "Unsupported function interface: {reason}")
             }
         }
     }
@@ -459,16 +498,19 @@ impl Sandbox {
                         actual: Some(actual.clone()),
                         expected: example.expected.clone(),
                         error: None,
+                        failure_kind: None,
                         duration_ms: duration.as_millis() as u64,
                     });
                 }
                 Err(e) => {
+                    let failure_kind = e.kind();
                     results.push(ExampleResult {
                         index: idx,
                         passed: false,
                         actual: None,
                         expected: example.expected.clone(),
                         error: Some(e.to_string()),
+                        failure_kind: Some(failure_kind),
                         duration_ms: duration.as_millis() as u64,
                     });
                 }
@@ -485,6 +527,26 @@ impl Sandbox {
             results,
             metrics,
         })
+    }
+
+    /// Verify the exact synthesized Rust function source by embedding it in a
+    /// typed stdin/stdout executable runner, then using the ordinary sandbox.
+    ///
+    /// This is explicit rather than auto-detecting source shape. The first
+    /// vertical slice supports fixed-arity scalar `i64` functions and refuses
+    /// every other interface without coercion.
+    pub fn verify_rust_function(
+        &self,
+        function_source: &str,
+        function_name: &str,
+        examples: &[Example],
+    ) -> Result<VerificationReport, SandboxError> {
+        let executable_source = super::rust_function_harness::wrap_rust_function(
+            function_source,
+            function_name,
+            examples,
+        )?;
+        self.verify(&executable_source, function_name, examples, Language::Rust)
     }
 
     /// Execute code directly (without verification)

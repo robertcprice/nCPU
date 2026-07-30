@@ -61,9 +61,27 @@ semantic contradictions (failure kind/outcome, report shape, or forged evidence 
 monitor cancellation and actual timeout now use separate state, capsule-sized output caps flow
 through `SandboxConfig`, and concurrent instances get distinct temp directories. Real-process
 sandbox gates pass **5 passed / 0 failed** (success, timeout, and output overflow). Existing
-repository warning debt remains. **NEXT:** execute a real
-Rust artifact through the existing sandbox under capsule policy, obtain strict provenance, emit
-the trace, and prove denial/timeout/tamper cases end-to-end before any canonical admission.
+repository warning debt remains.
+
+**VERTICAL EXECUTION SLICE (2026-07-29, same branch).** `CapsuleExecutor` now verifies the
+content-bound evaluator and exact visible examples, requires the explicit `sandbox.execute`
+capability, maps capsule timeout/memory/output bounds to the real process sandbox, embeds the
+exact synthesized scalar-i64 Rust function unchanged in a typed stdin/stdout runner, executes it
+on both visible and non-visible holdouts, then obtains strict provenance + differential consensus
+and emits the trace. The trace separately binds exact-artifact holdout execution, closing the
+cross-runtime gap where only the internal Mog interpreter could otherwise have seen holdouts.
+A cold-cache live path now passes:
+canonical LinguaGenesis comprehension (`SynthesisRequirement` for “add two numbers”) → nSynth
+artifact → nCPU rustc/process sandbox → strict trace, retaining the canonical entity lineage.
+Its registry-reserved holdout is honestly `HandFallback`, so the trace verifies but is NOT
+admission-eligible; a reference-generated holdout + affirmative consensus fixture is eligible.
+Evaluator substitution, policy denial, compilation failure, timeout, output overflow, budget
+exhaustion, semantic/digest tampering, and unsupported interfaces all fail closed without text
+matching. **Verified:** runtime **20 passed / 0 failed**; execution adapters/sandbox
+**7 passed / 0 failed**; provenance **3 passed / 0 failed**; capability registry
+**2 passed / 0 failed**; `cargo check --lib` passes. **NEXT:** add durable atomic trace/capsule
+persistence and a canonical LinguaGenesis admission adapter (proposal only; no nCPU knowledge
+store), then widen the typed harness by value shape rather than lexical cases.
 
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 

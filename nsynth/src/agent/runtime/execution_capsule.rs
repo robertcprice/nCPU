@@ -6,6 +6,7 @@
 
 use super::{AgentRunId, CodeTaskSpec, ContentDigest, SCHEMA_VERSION};
 use crate::agent::tools::SecureToolRuntime;
+use crate::benchmark::{FunctionDef, Problem};
 use crate::execution::{Example, Language};
 use linguigenesis_core::entity::EntityId;
 use serde::{Deserialize, Serialize};
@@ -148,6 +149,7 @@ pub struct ExecutionCapsule {
     pub run_id: AgentRunId,
     pub task: CodeTaskSpec,
     pub artifact: ExecutableArtifact,
+    pub evaluator_digest: ContentDigest,
     pub examples: Vec<Example>,
     pub policy: ExecutionPolicy,
     pub capsule_digest: ContentDigest,
@@ -159,23 +161,44 @@ struct CapsulePayload<'a> {
     run_id: &'a AgentRunId,
     task: &'a CodeTaskSpec,
     artifact: &'a ExecutableArtifact,
+    evaluator_digest: &'a ContentDigest,
     examples: &'a [Example],
     policy: &'a ExecutionPolicy,
+}
+
+#[derive(Serialize)]
+struct EvaluatorPayload<'a> {
+    name: &'a str,
+    category: &'a str,
+    description: &'a str,
+    signature: &'a str,
+    examples: &'a [crate::benchmark::Example],
+    holdouts: &'a [crate::benchmark::Example],
+    reference_code: &'a str,
+    synthetic_args: &'a [String],
+    synthetic_values: &'a [Vec<i64>],
+    recursive_allowed: bool,
+    tree_input: bool,
+    explicit_stack: bool,
+    functions: &'a [FunctionDef],
 }
 
 impl ExecutionCapsule {
     pub fn new(
         task: CodeTaskSpec,
         artifact: ExecutableArtifact,
+        evaluator: &Problem,
         examples: Vec<Example>,
         policy: ExecutionPolicy,
     ) -> Result<Self, CapsuleError> {
         let run_id = task.run_id.clone();
+        let evaluator_digest = evaluator_digest(evaluator)?;
         let mut capsule = Self {
             schema_version: SCHEMA_VERSION,
             run_id,
             task,
             artifact,
+            evaluator_digest,
             examples,
             policy,
             capsule_digest: ContentDigest::sha256(&[]),
@@ -204,11 +227,23 @@ impl ExecutionCapsule {
         if self.examples.is_empty() {
             return Err(CapsuleError::EmptyExamples);
         }
+        if !self.evaluator_digest.is_well_formed() {
+            return Err(CapsuleError::DigestMismatch("evaluator"));
+        }
         self.artifact.validate_integrity()?;
         self.policy.validate()?;
         let expected = self.recompute_digest()?;
         if !self.capsule_digest.is_well_formed() || self.capsule_digest != expected {
             return Err(CapsuleError::DigestMismatch("capsule"));
+        }
+        Ok(())
+    }
+
+    /// Verify that the evaluator presented at execution is exactly the one
+    /// content-bound into this capsule.
+    pub fn validate_evaluator(&self, evaluator: &Problem) -> Result<(), CapsuleError> {
+        if self.evaluator_digest != evaluator_digest(evaluator)? {
+            return Err(CapsuleError::DigestMismatch("evaluator"));
         }
         Ok(())
     }
@@ -219,6 +254,7 @@ impl ExecutionCapsule {
             run_id: &self.run_id,
             task: &self.task,
             artifact: &self.artifact,
+            evaluator_digest: &self.evaluator_digest,
             examples: &self.examples,
             policy: &self.policy,
         };
@@ -226,6 +262,27 @@ impl ExecutionCapsule {
             .map_err(|error| CapsuleError::Encoding(error.to_string()))?;
         Ok(ContentDigest::sha256(&bytes))
     }
+}
+
+fn evaluator_digest(evaluator: &Problem) -> Result<ContentDigest, CapsuleError> {
+    let payload = EvaluatorPayload {
+        name: &evaluator.name,
+        category: evaluator.category,
+        description: evaluator.description,
+        signature: evaluator.signature,
+        examples: &evaluator.examples,
+        holdouts: &evaluator.holdouts,
+        reference_code: evaluator.reference_code,
+        synthetic_args: &evaluator.synthetic_args,
+        synthetic_values: &evaluator.synthetic_values,
+        recursive_allowed: evaluator.recursive_allowed,
+        tree_input: evaluator.tree_input,
+        explicit_stack: evaluator.explicit_stack,
+        functions: &evaluator.functions,
+    };
+    let bytes =
+        serde_json::to_vec(&payload).map_err(|error| CapsuleError::Encoding(error.to_string()))?;
+    Ok(ContentDigest::sha256(&bytes))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +329,23 @@ mod tests {
     use crate::agent::coding_intent::CodingIntent;
     use crate::execution::InputValue;
 
+    fn evaluator() -> Problem {
+        Problem {
+            name: "add".into(),
+            category: "arithmetic",
+            description: "add two numbers",
+            signature: "fn add(a: i64, b: i64) -> i64",
+            examples: vec![crate::benchmark::Example {
+                inputs: vec![
+                    crate::benchmark::Value::Int(2),
+                    crate::benchmark::Value::Int(3),
+                ],
+                expected: crate::benchmark::Value::Int(5),
+            }],
+            ..Default::default()
+        }
+    }
+
     fn capsule() -> ExecutionCapsule {
         let intent = CodingIntent::from_nl("add two numbers").expect("intent");
         let task = CodeTaskSpec::from_nl(
@@ -296,6 +370,7 @@ mod tests {
         ExecutionCapsule::new(
             task,
             artifact,
+            &evaluator(),
             examples,
             ExecutionPolicy::new(vec!["fs.read".into()], 1_000, 64 * 1024 * 1024, 64 * 1024),
         )
@@ -310,6 +385,9 @@ mod tests {
         let restored: ExecutionCapsule = serde_json::from_str(&json).expect("deserialize");
         restored.validate_integrity().expect("valid roundtrip");
         assert_eq!(restored.capsule_digest, original.capsule_digest);
+        restored
+            .validate_evaluator(&evaluator())
+            .expect("bound evaluator");
     }
 
     #[test]
@@ -327,6 +405,13 @@ mod tests {
             .allowed_capabilities
             .push("shell.run".into());
         assert!(policy_tampered.validate_integrity().is_err());
+
+        let mut different_evaluator = evaluator();
+        different_evaluator.reference_code = "fn add(a:i64,b:i64)->i64{return a-b;}";
+        assert!(matches!(
+            capsule().validate_evaluator(&different_evaluator),
+            Err(CapsuleError::DigestMismatch("evaluator"))
+        ));
     }
 
     #[test]

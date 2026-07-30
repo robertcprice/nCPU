@@ -2,6 +2,7 @@
 
 mod budget;
 mod capability_admission;
+mod capsule_executor;
 mod code_task_spec;
 mod content_digest;
 mod execution_capsule;
@@ -10,6 +11,7 @@ mod state_machine;
 
 pub use budget::{AgentRunBudget, BudgetExhausted};
 pub use capability_admission::CapabilityAdmission;
+pub use capsule_executor::{CapsuleExecutor, SANDBOX_EXECUTION_CAPABILITY};
 pub use code_task_spec::CodeTaskSpec;
 pub use content_digest::ContentDigest;
 pub use execution_capsule::{CapsuleError, ExecutableArtifact, ExecutionCapsule, ExecutionPolicy};
