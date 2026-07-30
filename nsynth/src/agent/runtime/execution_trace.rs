@@ -608,6 +608,7 @@ mod tests {
             n_examples: 1,
             n_holdouts: 8,
             consensus,
+            artifact_verification: crate::agent::provenance::ArtifactVerificationPath::InternalMog,
         }
     }
 

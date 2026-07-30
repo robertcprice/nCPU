@@ -139,10 +139,33 @@ module **8/8**; runtime **25/25**; provenance **3/3**; capability registry
 independent Mog-runtime consensus. Composite Rust signatures do not yet share a
 verified structural representation with the Mog language, so this increment
 claims exact sandbox execution for those value shapes—not admission of every
-composite Rust artifact. **NEXT:** add a structurally parsed, proof-bound
-cross-runtime interface/verification seam without weakening independent
-consensus, then use the resulting typed observations in a budgeted multi-step
-tool loop.
+composite Rust artifact. The next checkpoint closes this limitation without
+translating source or weakening independent consensus.
+
+**CROSS-RUNTIME ARTIFACT CONSENSUS (2026-07-29, same branch).** Exact Rust
+artifacts are no longer required to parse and execute accidentally as Mog before
+they can receive provenance. The accepted source stays unchanged and executes
+only through rustc + the bounded process sandbox; independently authored
+evaluator reference code remains in the Mog verifier. Both implementations are
+co-executed on fresh typed robustness probes, and any value divergence yields
+`Ambiguous`. When no runnable reference exists, the existing bottom-up and
+leave-one-out independently synthesized Mog candidates remain the comparison
+set. A content-bound runnable reference short-circuits that expensive
+re-synthesis: it is already a stronger independent authority, and unrelated
+solver timeout must not downgrade oracle agreement. Provenance now records
+`ExactRustProcess` versus `InternalMog`; the default field is omitted for legacy
+v1 certificates, preserving old serialized trace digests. This is behavioral
+cross-runtime verification—not Rust→Mog text rewriting, regex routing, or reuse
+of the candidate as its own oracle. **Demonstrated:** an implicit-return Rust
+`String → String` artifact that the Mog strict verifier rejects directly passes
+the exact process visible examples, generated reference holdouts, fresh
+cross-runtime probes, affirmative consensus, trace serialization/integrity, and
+the unchanged capability-admission policy. **Verified:** cross-runtime vertical
+**1/1**; execution **8/8**; runtime **26/26**; consensus **5/5**; provenance
+**3/3**; capability registry **2/2**; cold-cache canonical vertical **1/1**;
+`cargo check --lib` passes with **438 existing warnings**. **NEXT:** compose
+content-bound observations into a budgeted multi-step tool loop whose every
+transition and final capability claim is independently replayable.
 
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 

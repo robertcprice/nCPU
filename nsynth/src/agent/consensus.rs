@@ -7,16 +7,22 @@
 //! it cannot catch a TOTAL-but-WRONG overfit (e.g. a constant that matches the
 //! visible examples and never crashes).
 //!
-//! This gate adds the missing correctness signal WITHOUT an oracle: synthesize
-//! one or more INDEPENDENT candidates and require them to AGREE with the accepted
-//! candidate on fresh inputs. Independence is essential — two programs from the
-//! same deterministic path are identical and agree vacuously. We obtain it two
-//! ways:
-//!   (a) the bottom-up [`crate::enumerative::synthesize_enumerative`] engine,
+//! This gate adds the missing correctness signal: obtain one or more INDEPENDENT
+//! implementations and require them to AGREE with the accepted candidate on fresh
+//! inputs. Independence is essential — two programs from the same deterministic
+//! path are identical and agree vacuously. We obtain it three ways:
+//!   (a) a separately authored runnable reference bound into the evaluator, when
+//!       one exists;
+//!   (b) the bottom-up [`crate::enumerative::synthesize_enumerative`] engine,
 //!       independent of the search portfolio that typically produces the agent's
 //!       accepted candidate; and
-//!   (b) leave-one-out re-synthesis on each `(n-1)`-example subset — a candidate
+//!   (c) leave-one-out re-synthesis on each `(n-1)`-example subset — a candidate
 //!       that changes behavior when one example is withheld is overfitting it.
+//!
+//! The accepted implementation does not have to run in the Mog interpreter.
+//! [`differential_consensus_external`] accepts a batched executor callback, which
+//! lets the exact Rust process artifact be compared against independent Mog
+//! implementations without translating source or weakening either runtime.
 //!
 //! Verdicts:
 //!   - [`ConsensusVerdict::Verified`]   — >= 1 independent candidate, all agree
@@ -77,28 +83,51 @@ fn consensus_budget_ms() -> u128 {
         .unwrap_or(20_000)
 }
 
-/// Gather INDEPENDENT candidates that also satisfy every visible example and
-/// differ textually from the accepted candidate. Returns `(candidates, truncated)`
-/// where `truncated` is true iff the leave-one-out pass stopped EARLY on the
-/// wall-clock budget (so the candidate set is a possibly-incomplete PREFIX — the
-/// caller must not treat unanimous agreement among a truncated set as `Verified`).
+/// Gather INDEPENDENT candidates that also satisfy every visible example.
+///
+/// A runnable evaluator reference is independent by authority even when its text
+/// happens to equal the accepted candidate: it was content-bound into the spec
+/// before execution and is run by the Mog verifier, while an external artifact is
+/// run by the OS process sandbox. Synthesized candidates must differ textually
+/// from the accepted candidate.
+///
+/// Returns `(candidates, truncated)` where `truncated` is true iff the
+/// leave-one-out pass stopped EARLY on the wall-clock budget (so the candidate
+/// set is a possibly-incomplete PREFIX — the caller must not treat unanimous
+/// agreement among a truncated set as `Verified`).
 fn independent_candidates(
     problem: &Problem,
     accepted_code: &str,
     budget_ms: u128,
 ) -> (Vec<String>, bool) {
     let mut raw: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     let start = std::time::Instant::now();
     let mut truncated = false;
 
-    // (a) bottom-up enumerative engine.
+    // (a) Evaluator-bound reference: a separately authored executable oracle.
+    // It remains independent when textually equal because external artifacts are
+    // co-executed through a different runtime. Internal callers also benefit from
+    // treating a bound reference as the authority rather than re-synthesis.
+    if !problem.reference_code.trim().is_empty()
+        && verify_problem_code(problem, problem.reference_code).is_ok()
+    {
+        out.push(problem.reference_code.to_string());
+        // A content-bound runnable oracle is stronger and cheaper than a
+        // possibly truncated re-synthesis prefix. Returning here also prevents
+        // an unrelated solver timeout from downgrading authoritative
+        // cross-runtime agreement to `NoConsensus`.
+        return (out, false);
+    }
+
+    // (b) bottom-up enumerative engine.
     if let Some(r) = crate::enumerative::synthesize_enumerative(problem) {
         if r.success {
             raw.push(r.code);
         }
     }
 
-    // (b) leave-one-out re-synthesis (only meaningful with >= 2 examples), bounded
+    // (c) leave-one-out re-synthesis (only meaningful with >= 2 examples), bounded
     // by the wall-clock budget so one pathological subset-solve cannot stall the
     // whole gate. Checked BEFORE each solve; the in-flight solve is not interrupted
     // (no cooperative deadline inside the search stages yet), so the true bound is
@@ -130,7 +159,6 @@ fn independent_candidates(
     // Keep only distinct candidates that (i) differ from the accepted one and
     // (ii) still fit ALL visible examples — a leave-one-out solve must not have
     // drifted off the full spec.
-    let mut out: Vec<String> = Vec::new();
     for code in raw {
         if code != accepted_code
             && !out.contains(&code)
@@ -147,6 +175,46 @@ pub fn differential_consensus(problem: &Problem, accepted_code: &str) -> Consens
     differential_consensus_with_budget(problem, accepted_code, consensus_budget_ms())
 }
 
+/// Compare an accepted implementation that executes outside the Mog runtime
+/// against the same independently gathered candidates used by
+/// [`differential_consensus`].
+///
+/// `execute_accepted` receives the complete probe batch and must return exactly
+/// one result per probe. A per-probe error means the accepted partial function
+/// was undefined there and is skipped, matching the internal gate's established
+/// definedness policy. A batch/setup failure or a cardinality mismatch is an
+/// explicit verifier error, never `NoConsensus`.
+pub(crate) fn differential_consensus_external<F>(
+    problem: &Problem,
+    accepted_code_identity: &str,
+    execute_accepted: F,
+) -> Result<ConsensusVerdict, String>
+where
+    F: FnOnce(&[Vec<Value>]) -> Result<Vec<Result<crate::runtime::Value, String>>, String>,
+{
+    let (independents, truncated) =
+        independent_candidates(problem, accepted_code_identity, consensus_budget_ms());
+    if independents.is_empty() {
+        return Ok(ConsensusVerdict::NoConsensus);
+    }
+    let probes = robustness_probe_inputs(problem);
+    let base_outputs = execute_accepted(&probes)?;
+    if base_outputs.len() != probes.len() {
+        return Err(format!(
+            "external consensus executor returned {} outputs for {} probes",
+            base_outputs.len(),
+            probes.len()
+        ));
+    }
+    Ok(compare_outputs(
+        problem,
+        &independents,
+        truncated,
+        &probes,
+        base_outputs,
+    ))
+}
+
 /// Core of [`differential_consensus`] with an explicit gather budget so the
 /// truncation-safety invariant is unit-testable without env/timing races.
 fn differential_consensus_with_budget(
@@ -161,17 +229,32 @@ fn differential_consensus_with_budget(
 
     let probes = robustness_probe_inputs(problem);
     let fn_name = problem.function_name();
+    let base_outputs = probes
+        .iter()
+        .map(|inputs| execute_function_for_problem(accepted_code, fn_name, inputs, problem))
+        .collect();
+    compare_outputs(problem, &independents, truncated, &probes, base_outputs)
+}
+
+fn compare_outputs(
+    problem: &Problem,
+    independents: &[String],
+    truncated: bool,
+    probes: &[Vec<Value>],
+    base_outputs: Vec<Result<crate::runtime::Value, String>>,
+) -> ConsensusVerdict {
+    let fn_name = problem.function_name();
     let mut checked = 0usize;
-    for inputs in &probes {
+    for (inputs, base) in probes.iter().zip(base_outputs) {
         // If the accepted candidate is undefined on this probe, skip it — we have
         // nothing to compare against (the robustness floor already ran clean-exec
         // on the accepted candidate before this gate).
-        let base = match execute_function_for_problem(accepted_code, fn_name, inputs, problem) {
+        let base = match base {
             Ok(v) => v,
             Err(_) => continue,
         };
         let mut compared_here = false;
-        for cand in &independents {
+        for cand in independents {
             match execute_function_for_problem(cand, fn_name, inputs, problem) {
                 Ok(other) => {
                     compared_here = true;
@@ -218,8 +301,7 @@ mod tests {
     use crate::benchmark::{Example, Problem, Value as BmValue};
 
     fn affine_problem(name: &str, pairs: &[(i64, i64)]) -> Problem {
-        let leaked: &'static str =
-            Box::leak(format!("fn {name}(a: i64) -> i64").into_boxed_str());
+        let leaked: &'static str = Box::leak(format!("fn {name}(a: i64) -> i64").into_boxed_str());
         Problem {
             name: name.to_string(),
             category: "test",
@@ -246,7 +328,10 @@ mod tests {
     #[test]
     fn is_examples_only_detects_regime() {
         let mut p = affine_problem("eo_detect_v0", &[(1, 2)]);
-        assert!(is_examples_only(&p), "no reference/holdouts → examples-only");
+        assert!(
+            is_examples_only(&p),
+            "no reference/holdouts → examples-only"
+        );
         p.reference_code = "fn eo_detect_v0(a: i64) -> i64 { return a + 1; }";
         assert!(!is_examples_only(&p), "a reference oracle exits the regime");
     }
@@ -266,6 +351,33 @@ mod tests {
             matches!(verdict, ConsensusVerdict::Verified { .. }),
             "a determined affine spec with a correct candidate must reach \
              consensus, got {verdict:?}"
+        );
+    }
+
+    #[test]
+    fn external_executor_disagreement_and_cardinality_mismatch_fail_closed() {
+        let mut problem =
+            affine_problem("consensus_external_v0", &[(1, 2), (2, 3), (3, 4), (4, 5)]);
+        problem.reference_code = "fn consensus_external_v0(a: i64) -> i64 { return a + 1; }";
+
+        let disagreement =
+            differential_consensus_external(&problem, "external-rust-artifact", |probes| {
+                Ok(probes
+                    .iter()
+                    .map(|_| Ok(crate::runtime::Value::Int(i64::MIN)))
+                    .collect())
+            })
+            .expect("comparison");
+        assert!(
+            matches!(disagreement, ConsensusVerdict::Ambiguous { .. }),
+            "external value disagreement must be explicit, got {disagreement:?}"
+        );
+
+        let mismatch =
+            differential_consensus_external(&problem, "external-rust-artifact", |_| Ok(vec![]));
+        assert!(
+            mismatch.is_err(),
+            "missing external probe outputs must be a verifier error"
         );
     }
 
@@ -306,10 +418,7 @@ mod tests {
     /// only consensus catches it.
     #[test]
     fn consensus_catches_offspec_divergent_overfit() {
-        let problem = affine_problem(
-            "consensus_overfit_v0",
-            &[(1, 2), (2, 3), (3, 4), (4, 5)],
-        );
+        let problem = affine_problem("consensus_overfit_v0", &[(1, 2), (2, 3), (3, 4), (4, 5)]);
         // Matches all four examples (a in 1..=4 → a+1) but returns a wrong
         // constant elsewhere — a total function, so the robustness floor accepts.
         let overfit = "fn consensus_overfit_v0(a: i64) -> i64 { \

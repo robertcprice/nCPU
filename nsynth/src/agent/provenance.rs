@@ -4,8 +4,11 @@
 //! trusted?" — surfacing the verification EVIDENCE that the bare
 //! `verify_problem_code_strict -> Result<(), String>` throws away. Built entirely
 //! from the EXISTING soundness machinery (strict holdout verification + the
-//! holdout-source honesty tag + differential consensus), so a certificate can only
-//! attest to checks that actually ran — never a rubber stamp.
+//! holdout-source honesty tag + differential consensus), so a certificate can
+//! only attest to checks that actually ran — never a rubber stamp. Accepted Mog
+//! code uses [`certify`]; exact Rust process artifacts use the narrower
+//! crate-internal [`certify_exact_rust_execution`] after their bound sandbox
+//! reports and cross-runtime consensus have completed.
 //!
 //! This is the self-contained trust primitive. Any synthesis path can adopt it by
 //! calling [`certify`] with the problem + accepted code + method label; wiring the
@@ -14,7 +17,31 @@
 
 use crate::agent::consensus::{differential_consensus, ConsensusVerdict};
 use crate::benchmark::{generated_holdouts_with_source, HoldoutSource, Problem};
+use crate::execution::VerificationReport;
 use serde::{Deserialize, Serialize};
+
+/// Runtime that executed the accepted artifact for the evidence in this
+/// certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArtifactVerificationPath {
+    /// The accepted source was parsed and executed by the internal Mog runtime.
+    InternalMog,
+    /// The exact Rust source was compiled and executed in the OS process sandbox;
+    /// independent candidates remained in Mog for cross-runtime consensus.
+    ExactRustProcess,
+}
+
+impl Default for ArtifactVerificationPath {
+    fn default() -> Self {
+        Self::InternalMog
+    }
+}
+
+impl ArtifactVerificationPath {
+    fn is_internal_mog(path: &Self) -> bool {
+        matches!(path, Self::InternalMog)
+    }
+}
 
 /// Evidence that a synthesized program reproduced its spec, with provenance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +61,13 @@ pub struct ProvenanceCertificate {
     /// consensus). `Ambiguous` here is a soundness WARNING even when strict verify
     /// passed: a second, independently synthesized candidate diverged on a probe.
     pub consensus: ConsensusVerdict,
+    /// Which runtime executed the accepted artifact. The default is omitted from
+    /// serialized legacy certificates so persisted v1 trace digests remain stable.
+    #[serde(
+        default,
+        skip_serializing_if = "ArtifactVerificationPath::is_internal_mog"
+    )]
+    pub artifact_verification: ArtifactVerificationPath,
 }
 
 impl ProvenanceCertificate {
@@ -93,6 +127,51 @@ pub fn certify(problem: &Problem, code: &str, method: &str) -> Verdict {
         n_examples: problem.examples.len(),
         n_holdouts: holdouts.len(),
         consensus,
+        artifact_verification: ArtifactVerificationPath::InternalMog,
+    })
+}
+
+/// Build provenance for an exact artifact already executed by the process
+/// sandbox on the evaluator's visible examples and non-visible holdouts.
+///
+/// This validates that the concrete reports cover the exact evaluator
+/// cardinalities and passed before recording separately computed cross-runtime
+/// consensus. The caller binds the reports and artifact digest into an
+/// [`crate::agent::runtime::ExecutionTrace`].
+pub(crate) fn certify_exact_rust_execution(
+    problem: &Problem,
+    method: &str,
+    visible_report: &VerificationReport,
+    holdout_report: &VerificationReport,
+    consensus: ConsensusVerdict,
+) -> Result<ProvenanceCertificate, String> {
+    if method.trim().is_empty() {
+        return Err("exact Rust provenance method is empty".into());
+    }
+    if !visible_report.all_passed() || visible_report.total != problem.examples.len() {
+        return Err(format!(
+            "exact Rust visible report covers {}/{} passing examples, evaluator requires {}",
+            visible_report.passed,
+            visible_report.total,
+            problem.examples.len()
+        ));
+    }
+    let (holdouts, holdout_source) = generated_holdouts_with_source(problem);
+    if !holdout_report.all_passed() || holdout_report.total != holdouts.len() {
+        return Err(format!(
+            "exact Rust holdout report covers {}/{} passing holdouts, evaluator requires {}",
+            holdout_report.passed,
+            holdout_report.total,
+            holdouts.len()
+        ));
+    }
+    Ok(ProvenanceCertificate {
+        method: method.to_string(),
+        holdout_source,
+        n_examples: visible_report.total,
+        n_holdouts: holdout_report.total,
+        consensus,
+        artifact_verification: ArtifactVerificationPath::ExactRustProcess,
     })
 }
 
@@ -122,7 +201,11 @@ mod tests {
     #[test]
     fn certifies_correct_program_with_generalization_holdouts() {
         let p = square_problem();
-        let v = certify(&p, "fn square(x: i64) -> i64 { return x * x; }", "test-method");
+        let v = certify(
+            &p,
+            "fn square(x: i64) -> i64 { return x * x; }",
+            "test-method",
+        );
         let cert = v.certificate().expect("x*x must verify");
         assert_eq!(cert.method, "test-method");
         assert_eq!(cert.n_examples, 4);
@@ -141,7 +224,11 @@ mod tests {
         let p = square_problem();
         // `x + x` (doubling) reproduces only x=2 (4) and x=0; it fails 3->9 etc., so
         // strict verify must REFUTE it — no certificate.
-        let v = certify(&p, "fn square(x: i64) -> i64 { return x + x; }", "test-method");
+        let v = certify(
+            &p,
+            "fn square(x: i64) -> i64 { return x + x; }",
+            "test-method",
+        );
         assert!(!v.is_verified(), "x+x must be refuted, got {v:?}");
         assert!(v.certificate().is_none());
     }

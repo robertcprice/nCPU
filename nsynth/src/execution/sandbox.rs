@@ -555,6 +555,34 @@ impl Sandbox {
         })
     }
 
+    /// Execute one exact Rust function over a batch of typed inputs without
+    /// supplying expected outputs.
+    ///
+    /// The interface is still derived from `interface_examples`, so callers
+    /// cannot reinterpret a value by inspecting source text. The candidate is
+    /// compiled once and every probe runs through the same typed wire used by
+    /// [`Self::verify_rust_function`]. Per-probe runtime failures remain
+    /// separate results so a differential verifier can apply its own
+    /// definedness policy without hiding compilation/interface failures.
+    pub(crate) fn evaluate_rust_function(
+        &self,
+        function_source: &str,
+        function_name: &str,
+        interface_examples: &[Example],
+        inputs: &[Vec<InputValue>],
+    ) -> Result<Vec<Result<InputValue, SandboxError>>, SandboxError> {
+        let harness = super::rust_function_harness::RustFunctionHarness::build(
+            function_source,
+            function_name,
+            interface_examples,
+        )?;
+        let executable = self.compile(&harness.source, Language::Rust)?;
+        Ok(inputs
+            .iter()
+            .map(|inputs| self.execute_rust_function_inputs(&executable, &harness, inputs))
+            .collect())
+    }
+
     /// Execute code directly (without verification)
     ///
     /// Runs the code and returns the raw execution result.
@@ -700,7 +728,16 @@ impl Sandbox {
         harness: &super::rust_function_harness::RustFunctionHarness,
         example: &Example,
     ) -> Result<InputValue, SandboxError> {
-        let input = harness.encode_inputs(&example.inputs)?;
+        self.execute_rust_function_inputs(executable, harness, &example.inputs)
+    }
+
+    fn execute_rust_function_inputs(
+        &self,
+        executable: &Path,
+        harness: &super::rust_function_harness::RustFunctionHarness,
+        inputs: &[InputValue],
+    ) -> Result<InputValue, SandboxError> {
+        let input = harness.encode_inputs(inputs)?;
         let result = self.run_executable_with_stdin(executable, &input, Language::Rust)?;
         if result.timed_out {
             return Err(SandboxError::Timeout {

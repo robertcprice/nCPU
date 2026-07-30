@@ -9,7 +9,8 @@ use super::{
     AgentRunBudget, ExecutionCapsule, ExecutionFailure, ExecutionFailureKind, ExecutionTrace,
     TraceError,
 };
-use crate::agent::provenance::{certify, Verdict};
+use crate::agent::consensus::differential_consensus_external;
+use crate::agent::provenance::certify_exact_rust_execution;
 use crate::benchmark::{
     generated_holdouts_with_source, Example as BenchmarkExample, Problem, Value,
 };
@@ -17,6 +18,7 @@ use crate::execution::{
     Example, InputValue, Language, Sandbox, SandboxConfig, SandboxError, SandboxFailureKind,
     VerificationReport,
 };
+use crate::runtime::Value as RuntimeValue;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -206,13 +208,57 @@ impl CapsuleExecutor {
             );
         }
 
-        let provenance = match certify(
+        let consensus =
+            match differential_consensus_external(evaluator, &capsule.artifact.source, |probes| {
+                let typed_inputs = probes
+                    .iter()
+                    .map(|inputs| {
+                        inputs
+                            .iter()
+                            .map(sandbox_value)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| format!("external consensus probe conversion: {error:?}"))?;
+                let outputs = sandbox
+                    .evaluate_rust_function(
+                        &capsule.artifact.source,
+                        &capsule.artifact.function_name,
+                        &capsule.examples,
+                        &typed_inputs,
+                    )
+                    .map_err(|error| {
+                        format!("external consensus runner preparation failed: {error}")
+                    })?;
+                Ok(outputs
+                    .into_iter()
+                    .map(|output| {
+                        output
+                            .map(runtime_value)
+                            .map_err(|error| format!("external consensus probe failed: {error}"))
+                    })
+                    .collect())
+            }) {
+                Ok(consensus) => consensus,
+                Err(reason) => {
+                    record_wall(&mut budget, initial_wall_ms, started);
+                    return ExecutionTrace::from_failure(
+                        capsule,
+                        ExecutionFailure::new(ExecutionFailureKind::Verification, reason),
+                        budget,
+                        vec![SANDBOX_EXECUTION_CAPABILITY.into()],
+                    );
+                }
+            };
+        let provenance = match certify_exact_rust_execution(
             evaluator,
-            &capsule.artifact.source,
             &capsule.artifact.synthesis_method,
+            &visible_report,
+            &holdout_report,
+            consensus,
         ) {
-            Verdict::Verified(certificate) => certificate,
-            Verdict::Refuted { reason } => {
+            Ok(certificate) => certificate,
+            Err(reason) => {
                 record_wall(&mut budget, initial_wall_ms, started);
                 return ExecutionTrace::from_failure(
                     capsule,
@@ -278,6 +324,21 @@ fn sandbox_value(value: &Value) -> Result<InputValue, TraceError> {
     }
 }
 
+fn runtime_value(value: InputValue) -> RuntimeValue {
+    match value {
+        InputValue::Int(value) => RuntimeValue::Int(value),
+        InputValue::Float(value) => RuntimeValue::Float(value),
+        InputValue::Bool(value) => RuntimeValue::Bool(value),
+        InputValue::String(value) => RuntimeValue::Str(value),
+        InputValue::IntArray(values) => RuntimeValue::Array(
+            values
+                .into_iter()
+                .map(RuntimeValue::Int)
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
 fn failure_trace(
     capsule: &ExecutionCapsule,
     error: SandboxError,
@@ -331,6 +392,8 @@ mod tests {
     };
     use super::*;
     use crate::agent::coding_intent::CodingIntent;
+    use crate::agent::consensus::ConsensusVerdict;
+    use crate::agent::provenance::ArtifactVerificationPath;
     use crate::benchmark::HoldoutSource;
     use crate::benchmark::{Example as BenchmarkExample, Value};
     use crate::linguigenesis_bridge::LinguigenesisBridge;
@@ -445,6 +508,96 @@ mod tests {
             .as_ref()
             .is_some_and(|r| r.all_passed() && r.total > 0));
         assert!(trace.admission_eligible(), "{trace:#?}");
+    }
+
+    #[test]
+    fn exact_rust_string_artifact_reaches_cross_runtime_consensus() {
+        let problem = Problem {
+            name: "capsule_string_identity_v0".into(),
+            category: "string",
+            description: "return the input string unchanged",
+            signature: "fn capsule_string_identity_v0(value: string) -> string",
+            examples: vec![
+                BenchmarkExample {
+                    inputs: vec![Value::Str("alpha".into())],
+                    expected: Value::Str("alpha".into()),
+                },
+                BenchmarkExample {
+                    inputs: vec![Value::Str("42\nλ\0".into())],
+                    expected: Value::Str("42\nλ\0".into()),
+                },
+            ],
+            reference_code:
+                "fn capsule_string_identity_v0(value: string) -> string { return value; }",
+            ..Default::default()
+        };
+        let exact_rust = "fn capsule_string_identity_v0(value: String) -> String { value }";
+        assert!(
+            crate::runtime::verify_problem_code_strict(&problem, exact_rust).is_err(),
+            "fixture must exercise a Rust artifact that the Mog verifier cannot certify directly"
+        );
+        let intent = CodingIntent {
+            function_name: problem.name.clone(),
+            signature: problem.signature.into(),
+            category: problem.category.into(),
+            description: problem.description.into(),
+            examples: vec![],
+            constraints: vec![],
+            confidence: 1.0,
+            unresolved: vec![],
+            evidence_entity_ids: vec![23],
+            reference_code: problem.reference_code.into(),
+        };
+        let task = CodeTaskSpec::from_nl(
+            "/tmp/repo",
+            problem.description,
+            intent,
+            "cargo test capsule_string_identity_v0",
+            vec!["src/lib.rs".into()],
+            2,
+        );
+        let capsule = ExecutionCapsule::new(
+            task,
+            ExecutableArtifact::new(
+                &problem.name,
+                exact_rust,
+                Language::Rust,
+                "typed-rust-fixture",
+                vec![23 as EntityId],
+            ),
+            &problem,
+            sandbox_examples(&problem.examples).expect("typed examples"),
+            ExecutionPolicy::new(
+                vec![SANDBOX_EXECUTION_CAPABILITY.into()],
+                5_000,
+                128 * 1024 * 1024,
+                4096,
+            ),
+        )
+        .expect("capsule");
+
+        let trace = CapsuleExecutor::execute(&capsule, &problem).expect("trace");
+        let provenance = trace.provenance.as_ref().expect("provenance");
+        assert_eq!(trace.outcome, ExecutionTraceOutcome::Verified);
+        assert_eq!(
+            provenance.artifact_verification,
+            ArtifactVerificationPath::ExactRustProcess
+        );
+        assert!(matches!(
+            provenance.consensus,
+            ConsensusVerdict::Verified { agreeing: 1, probes } if probes > 0
+        ));
+        assert!(trace.admission_eligible(), "{trace:#?}");
+        let json = serde_json::to_string(&trace).expect("serialize trace");
+        let restored: ExecutionTrace = serde_json::from_str(&json).expect("deserialize trace");
+        restored.validate_integrity().expect("restored integrity");
+        assert_eq!(
+            restored
+                .provenance
+                .expect("restored provenance")
+                .artifact_verification,
+            ArtifactVerificationPath::ExactRustProcess
+        );
     }
 
     #[test]
