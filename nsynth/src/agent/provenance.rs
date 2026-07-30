@@ -14,9 +14,10 @@
 
 use crate::agent::consensus::{differential_consensus, ConsensusVerdict};
 use crate::benchmark::{generated_holdouts_with_source, HoldoutSource, Problem};
+use serde::{Deserialize, Serialize};
 
 /// Evidence that a synthesized program reproduced its spec, with provenance.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceCertificate {
     /// The synthesis method that produced the accepted program.
     pub method: String,

@@ -912,7 +912,7 @@ pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
 /// evidence, so a "verified by generalization" metric must EXCLUDE them. A pass
 /// over `HandFallback` holdouts is still a valid example-style pass — it just
 /// must not be counted as strict-by-generalization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HoldoutSource {
     /// Points labelled by running the reference over freshly sampled inputs.
     Generated,

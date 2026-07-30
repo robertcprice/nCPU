@@ -45,6 +45,22 @@ Do not let near-term packaging reduce the ambition. A G9 release can ship a narr
 > **Every agent must read Sections 0.05, 0, 0.6, 0.7, 3, 6, 7, and the current phase card before editing code.**
 > This roadmap replaces historical “completed” checklists. A module existing does not mean the capability works.
 
+**PROOF-CARRYING COGNITIVE LOOP CHECKPOINT (2026-07-29, branch `cognitive-compute-loop`).**
+The live `agent/runtime` contract now has dependency-free SHA-256 content identities, a typed
+`ExecutionCapsule` binding `CodeTaskSpec` + synthesized source + canonical LinguaGenesis entity
+lineage + examples + the exact `SecureToolRuntime` allowlist/resource policy, and an
+`ExecutionTrace` binding sandbox results + existing `ProvenanceCertificate` + budget/capability
+use + typed fail-closed outcomes. `CapabilityAdmission` is deliberately only a trace-bound
+proposal for the canonical LinguaGenesis graph—there is no second durable nCPU knowledge store.
+Admission is stricter than passing examples: it requires generated holdouts, affirmative
+independent consensus, canonical lineage, and an in-budget run. Recomputed hashes cannot conceal
+semantic contradictions (failure kind/outcome, report shape, or forged evidence bindings).
+**Verified:** `agent::runtime` **15 passed / 0 failed**; `agent::provenance`
+**3 passed / 0 failed**; `agent::capability_registry` **2 passed / 0 failed**;
+`cargo check --lib` passes. Existing repository warning debt remains. **NEXT:** execute a real
+Rust artifact through the existing sandbox under capsule policy, obtain strict provenance, emit
+the trace, and prove denial/timeout/tamper cases end-to-end before any canonical admission.
+
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 
 **★★★ PATH TO WHOLE-SOFTWARE SYNTHESIS — AUTHORITATIVE PLAN (2026-07-09, user-directed "how do we get to programming entire software"). This is the top-level agent-axis roadmap; the U-phases/UTBUS below remain the SYNTHESIS-ENGINE substrate this rides on.**

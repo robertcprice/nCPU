@@ -30,8 +30,9 @@
 
 use crate::benchmark::{robustness_probe_inputs, Problem, Value};
 use crate::runtime::{execute_function_for_problem, outputs_equal, verify_problem_code};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConsensusVerdict {
     /// `agreeing` independent candidates agreed with the accepted candidate over
     /// `probes` co-executed probe inputs.
