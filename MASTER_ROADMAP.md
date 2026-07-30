@@ -117,6 +117,33 @@ both crate checks pass. **NEXT:** widen the typed exact-artifact harness by
 value shape, then compose proof-bound observations into a budgeted multi-step
 tool loop.
 
+**TYPED EXACT-ARTIFACT EXECUTION (2026-07-29, same branch).** The process
+sandbox no longer assumes that every synthesized Rust function is
+`i64 × … × i64 → i64`. A modular `RustFunctionHarness` derives one fixed
+interface solely from the examples' typed `InputValue` variants and supports
+mixed fixed-arity inputs and outputs across `i64`, bit-exact `f64`, `bool`,
+owned `String`, and `Vec<i64>`. It embeds the exact candidate function source
+unchanged, compiles one runner, and executes every example through a
+dependency-free length-prefixed binary input wire and unambiguous typed output
+wire. Unicode, embedded newlines, NUL bytes, empty arrays, negative integers,
+and negative zero survive the boundary. Mixed example interfaces,
+heterogeneous arrays, tuples, malformed output, and injectable function names
+are refused. The former unsupported-value → `Int(0)` conversion is deleted;
+both benchmark and evaluator conversions now fail closed instead of silently
+changing the task. Selection is by typed value shape—not source inspection,
+keywords, regexes, or benchmark identities. **Verified:** harness unit tests
+**2/2**; real mixed-value and array-output rustc/process test **1/1**; execution
+module **8/8**; runtime **25/25**; provenance **3/3**; capability registry
+**2/2**; cold-cache canonical vertical **1/1**; `cargo check --lib` passes with
+**438 existing warnings**. **HONEST LIMIT:** admission still requires
+independent Mog-runtime consensus. Composite Rust signatures do not yet share a
+verified structural representation with the Mog language, so this increment
+claims exact sandbox execution for those value shapes—not admission of every
+composite Rust artifact. **NEXT:** add a structurally parsed, proof-bound
+cross-runtime interface/verification seam without weakening independent
+consensus, then use the resulting typed observations in a budgeted multi-step
+tool loop.
+
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 
 **★★★ PATH TO WHOLE-SOFTWARE SYNTHESIS — AUTHORITATIVE PLAN (2026-07-09, user-directed "how do we get to programming entire software"). This is the top-level agent-axis roadmap; the U-phases/UTBUS below remain the SYNTHESIS-ENGINE substrate this rides on.**

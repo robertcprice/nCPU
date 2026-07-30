@@ -267,6 +267,13 @@ fn sandbox_examples(examples: &[BenchmarkExample]) -> Result<Vec<Example>, Trace
 fn sandbox_value(value: &Value) -> Result<InputValue, TraceError> {
     match value {
         Value::Int(value) => Ok(InputValue::Int(*value)),
+        Value::Float(bits) => Ok(InputValue::Float(f64::from_bits(*bits))),
+        Value::Str(value) => Ok(InputValue::String(value.clone())),
+        Value::Bool(value) => Ok(InputValue::Bool(*value)),
+        Value::Array(_) => value
+            .as_i64_slice()
+            .map(InputValue::IntArray)
+            .ok_or(TraceError::UnsupportedEvaluatorValue),
         _ => Err(TraceError::UnsupportedEvaluatorValue),
     }
 }
@@ -336,6 +343,43 @@ mod tests {
             inputs: vec![Value::Int(input)],
             expected: Value::Int(expected),
         }
+    }
+
+    #[test]
+    fn evaluator_values_map_by_typed_shape_without_fallback_coercion() {
+        assert_eq!(
+            sandbox_value(&Value::Int(-4)).expect("int"),
+            InputValue::Int(-4)
+        );
+        assert_eq!(
+            sandbox_value(&Value::Float(3.25_f64.to_bits())).expect("float"),
+            InputValue::Float(3.25)
+        );
+        assert_eq!(
+            sandbox_value(&Value::Bool(true)).expect("bool"),
+            InputValue::Bool(true)
+        );
+        assert_eq!(
+            sandbox_value(&Value::Str("42\nλ".into())).expect("string"),
+            InputValue::String("42\nλ".into())
+        );
+        assert_eq!(
+            sandbox_value(&Value::Array(vec![
+                Value::Int(-2),
+                Value::Int(0),
+                Value::Int(8)
+            ]))
+            .expect("i64 array"),
+            InputValue::IntArray(vec![-2, 0, 8])
+        );
+        assert!(matches!(
+            sandbox_value(&Value::Array(vec![Value::Int(1), Value::Bool(true)])),
+            Err(TraceError::UnsupportedEvaluatorValue)
+        ));
+        assert!(matches!(
+            sandbox_value(&Value::Tuple(vec![Value::Int(1)])),
+            Err(TraceError::UnsupportedEvaluatorValue)
+        ));
     }
 
     fn square_problem() -> Problem {

@@ -148,22 +148,20 @@ pub enum InputValue {
     IntArray(Vec<i64>),
 }
 
-impl From<BenchmarkValue> for InputValue {
-    fn from(value: BenchmarkValue) -> Self {
+impl TryFrom<BenchmarkValue> for InputValue {
+    type Error = String;
+
+    fn try_from(value: BenchmarkValue) -> Result<Self, Self::Error> {
         match value {
-            BenchmarkValue::Int(i) => InputValue::Int(i),
-            BenchmarkValue::Float(f) => InputValue::Float(f64::from_bits(f)),
-            BenchmarkValue::Bool(b) => InputValue::Bool(b),
-            BenchmarkValue::Str(s) => InputValue::String(s),
-            // This sandbox input type only models integer arrays. An all-int
-            // array converts directly; a typed/nested array has no `InputValue`
-            // representation, so fall through to the unsupported fallback rather
-            // than silently dropping element data.
-            ref v @ BenchmarkValue::Array(_) => match v.as_i64_slice() {
-                Some(ints) => InputValue::IntArray(ints),
-                None => InputValue::Int(0),
-            },
-            _ => InputValue::Int(0), // Fallback for unsupported types
+            BenchmarkValue::Int(i) => Ok(InputValue::Int(i)),
+            BenchmarkValue::Float(f) => Ok(InputValue::Float(f64::from_bits(f))),
+            BenchmarkValue::Bool(b) => Ok(InputValue::Bool(b)),
+            BenchmarkValue::Str(s) => Ok(InputValue::String(s)),
+            ref value @ BenchmarkValue::Array(_) => value
+                .as_i64_slice()
+                .map(InputValue::IntArray)
+                .ok_or_else(|| "sandbox supports only homogeneous i64 arrays".into()),
+            _ => Err("benchmark value has no sandbox InputValue representation".into()),
         }
     }
 }
@@ -471,12 +469,18 @@ impl Sandbox {
         examples: &[Example],
         language: Language,
     ) -> Result<VerificationReport, SandboxError> {
-        let start = Instant::now();
-
-        // First, compile the code
         let executable = self.compile(code, language)?;
+        self.verify_examples(examples, |example| {
+            self.execute_example(&executable, function_name, example, language)
+        })
+    }
 
-        // Run each example
+    fn verify_examples(
+        &self,
+        examples: &[Example],
+        mut execute: impl FnMut(&Example) -> Result<InputValue, SandboxError>,
+    ) -> Result<VerificationReport, SandboxError> {
+        let start = Instant::now();
         let mut results = Vec::with_capacity(examples.len());
         let mut metrics = ExecutionMetrics {
             examples_executed: examples.len(),
@@ -485,8 +489,7 @@ impl Sandbox {
 
         for (idx, example) in examples.iter().enumerate() {
             let example_start = Instant::now();
-            let exec_result = self.execute_example(&executable, function_name, example, language);
-
+            let exec_result = execute(example);
             let duration = example_start.elapsed();
 
             match exec_result {
@@ -532,21 +535,24 @@ impl Sandbox {
     /// Verify the exact synthesized Rust function source by embedding it in a
     /// typed stdin/stdout executable runner, then using the ordinary sandbox.
     ///
-    /// This is explicit rather than auto-detecting source shape. The first
-    /// vertical slice supports fixed-arity scalar `i64` functions and refuses
-    /// every other interface without coercion.
+    /// This is explicit rather than auto-detecting source shape. One fixed
+    /// interface is induced from the examples' actual value variants; mixed
+    /// interfaces and unsupported values are refused without coercion.
     pub fn verify_rust_function(
         &self,
         function_source: &str,
         function_name: &str,
         examples: &[Example],
     ) -> Result<VerificationReport, SandboxError> {
-        let executable_source = super::rust_function_harness::wrap_rust_function(
+        let harness = super::rust_function_harness::RustFunctionHarness::build(
             function_source,
             function_name,
             examples,
         )?;
-        self.verify(&executable_source, function_name, examples, Language::Rust)
+        let executable = self.compile(&harness.source, Language::Rust)?;
+        self.verify_examples(examples, |example| {
+            self.execute_rust_function_example(&executable, &harness, example)
+        })
     }
 
     /// Execute code directly (without verification)
@@ -688,11 +694,47 @@ impl Sandbox {
         self.parse_output(&result.stdout, language)
     }
 
+    fn execute_rust_function_example(
+        &self,
+        executable: &Path,
+        harness: &super::rust_function_harness::RustFunctionHarness,
+        example: &Example,
+    ) -> Result<InputValue, SandboxError> {
+        let input = harness.encode_inputs(&example.inputs)?;
+        let result = self.run_executable_with_stdin(executable, &input, Language::Rust)?;
+        if result.timed_out {
+            return Err(SandboxError::Timeout {
+                language: Language::Rust,
+                timeout_secs: self.config.timeout.as_secs(),
+            });
+        }
+        if result.exit_code.is_some_and(|code| code != 0) {
+            return Err(SandboxError::RuntimePanic {
+                message: format!(
+                    "typed Rust runner exited with code {}",
+                    result.exit_code.unwrap_or(-1)
+                ),
+                backtrace: Some(result.stderr),
+            });
+        }
+        harness.parse_output(&result.stdout)
+    }
+
     /// Run the compiled program with inputs
     fn run_executable(
         &self,
         executable: &Path,
         inputs: &[InputValue],
+        language: Language,
+    ) -> Result<ExecutionResult, SandboxError> {
+        let input = self.format_inputs(inputs, language);
+        self.run_executable_with_stdin(executable, input.as_bytes(), language)
+    }
+
+    fn run_executable_with_stdin(
+        &self,
+        executable: &Path,
+        input: &[u8],
         language: Language,
     ) -> Result<ExecutionResult, SandboxError> {
         let start = Instant::now();
@@ -745,12 +787,9 @@ impl Sandbox {
 
         // Write inputs to stdin
         if let Some(mut stdin) = child.stdin.take() {
-            let input_str = self.format_inputs(inputs, language);
-            stdin
-                .write_all(input_str.as_bytes())
-                .map_err(|e| SandboxError::IoError {
-                    message: format!("Failed to write to stdin: {}", e),
-                })?;
+            stdin.write_all(input).map_err(|e| SandboxError::IoError {
+                message: format!("Failed to write to stdin: {}", e),
+            })?;
         }
 
         // Set up timeout monitoring
@@ -1051,6 +1090,20 @@ mod tests {
         assert_eq!(InputValue::Int(42).to_string(), "42");
         assert_eq!(InputValue::Bool(true).to_string(), "true");
         assert_eq!(InputValue::IntArray(vec![1, 2, 3]).to_string(), "[1, 2, 3]");
+        assert_eq!(
+            InputValue::try_from(BenchmarkValue::Array(vec![
+                BenchmarkValue::Int(1),
+                BenchmarkValue::Int(2)
+            ]))
+            .expect("homogeneous array"),
+            InputValue::IntArray(vec![1, 2])
+        );
+        assert!(InputValue::try_from(BenchmarkValue::Array(vec![
+            BenchmarkValue::Int(1),
+            BenchmarkValue::Bool(true)
+        ]))
+        .is_err());
+        assert!(InputValue::try_from(BenchmarkValue::Pair(1, 2)).is_err());
     }
 
     #[test]
@@ -1101,6 +1154,55 @@ fn main() {{
             )
             .expect("verification report");
         assert!(report.all_passed(), "{report:?}");
+    }
+
+    #[test]
+    fn typed_function_runner_executes_mixed_values_and_array_outputs() {
+        let sandbox = Sandbox::new().expect("sandbox");
+        let mixed = sandbox
+            .verify_rust_function(
+                r#"fn describe(
+                    number: i64,
+                    real: f64,
+                    enabled: bool,
+                    label: String,
+                    values: Vec<i64>,
+                ) -> String {
+                    format!(
+                        "{}|{:016x}|{}|{}|{}",
+                        number,
+                        real.to_bits(),
+                        enabled,
+                        label,
+                        values.iter().sum::<i64>()
+                    )
+                }"#,
+                "describe",
+                &[Example {
+                    inputs: vec![
+                        InputValue::Int(-7),
+                        InputValue::Float(3.25),
+                        InputValue::Bool(true),
+                        InputValue::String("42\nλ\0".into()),
+                        InputValue::IntArray(vec![-2, 0, 8]),
+                    ],
+                    expected: InputValue::String("-7|400a000000000000|true|42\nλ\0|6".into()),
+                }],
+            )
+            .expect("mixed typed report");
+        assert!(mixed.all_passed(), "{mixed:?}");
+
+        let arrays = sandbox
+            .verify_rust_function(
+                "fn reverse(mut values: Vec<i64>) -> Vec<i64> { values.reverse(); values }",
+                "reverse",
+                &[Example {
+                    inputs: vec![InputValue::IntArray(vec![-3, 0, 9])],
+                    expected: InputValue::IntArray(vec![9, 0, -3]),
+                }],
+            )
+            .expect("array report");
+        assert!(arrays.all_passed(), "{arrays:?}");
     }
 
     #[test]
