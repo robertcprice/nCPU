@@ -196,6 +196,45 @@ safety yet. **NEXT:** derive candidate step graphs from canonical semantic
 relations and verified capability contracts, then add cancellable
 subprocess/network execution before admitting a multi-step capability.
 
+**STEP GRAPHS INDUCED FROM CANONICAL CONTRACTS (2026-07-30, same branch).**
+Multi-step plans are no longer only hand-supplied data. A verified capability may
+now declare, at admission, the typed values it consumes and produces; each slot
+names its data kind by canonical KVRM entity ID. LinguaGenesis projects every
+slot as a `lg:ComputationalSlot` Variable node bound to the capability by an
+`ActionArgument` edge and to its data kind by an `InstanceOf` edge, refuses a
+slot whose data kind falls outside the capability's evidence lineage before any
+write, stays idempotent, and binds the slots into the admission proof. The
+matching reader (`read_verified_capability_contracts`) recovers contracts from
+the graph, and `data_kind_admits` answers producer-satisfies-consumer using only
+registry relations — identity, synonym, or a bounded hypernym chain, directional
+so a producer may be more specific than required, never less. nCPU's
+`tool_plan_induction` composes those contracts into candidate
+`ToolExecutionPlan`s: it enumerates chains whose every argument resolves to a
+caller seed or a prior observation of a canonically compatible kind, requires
+each appended step to consume something the chain produced (so a plan is causal,
+not a concatenation), refuses a goal that is uncomposable or outside policy,
+bounds its own search, and reports what it skipped and why. Every candidate still
+goes through the unchanged plan invariants and the deny-by-default runtime.
+**Verified end-to-end:** with `fs.read`/`fs.write` contracts admitted through the
+real canonical boundary and `utf8_text is-a text` as the only bridge between
+them, induction produces read-then-write chains, and the chosen chain executes on
+a real sandbox — copy file content matches the seed byte-for-byte. Removing that
+one canonical relation induces **zero** plans; removing the contract makes the
+capability uncomposable rather than invisible. **Verified:** induction **3/3**;
+tool-chain **3/3**; runtime **33/33**; existing tool runtime **37/37**; execution
+**8/8**; cross-runtime typed vertical **1/1**; consensus **7/7**; provenance
+**3/3**; capability registry **3/3**; canonical admission vertical **2/2**;
+`linguigenesis-core` **163/163**; `cargo check --lib` passes with the same **438**
+existing warnings. **HONEST LIMITS:** contracts are declared by whoever proposes
+the capability — nothing yet mines a tool's real argument surface, so a wrong
+declaration yields wrong candidates (the runtime still refuses illegal calls);
+induction ranks only by chain length and digest, with no cost or utility model;
+seeds and the goal capability are caller-supplied, so this is contract-driven
+composition, not goal inference from natural language. Hard in-flight
+cancellation is still absent. Do not claim autonomous goal formation or timeout
+safety. **NEXT:** cancellable subprocess/network execution, then admit an
+independently verified multi-step capability through the same boundary.
+
 ### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
 
 **★★★ PATH TO WHOLE-SOFTWARE SYNTHESIS — AUTHORITATIVE PLAN (2026-07-09, user-directed "how do we get to programming entire software"). This is the top-level agent-axis roadmap; the U-phases/UTBUS below remain the SYNTHESIS-ENGINE substrate this rides on.**

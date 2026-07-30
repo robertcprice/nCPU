@@ -375,6 +375,7 @@ pub enum TraceError {
     NotAdmissionEligible,
     AdmissionTargetOutsideLineage,
     AdmissionInvariant,
+    AdmissionContract(&'static str),
     TraceCapsuleMismatch,
     DigestMismatch,
     AdmissionDigestMismatch,
@@ -431,6 +432,9 @@ impl fmt::Display for TraceError {
             }
             Self::AdmissionTargetOutsideLineage => {
                 formatter.write_str("capability target is outside the trace evidence lineage")
+            }
+            Self::AdmissionContract(reason) => {
+                write!(formatter, "invalid capability contract: {reason}")
             }
             Self::AdmissionInvariant => {
                 formatter.write_str("capability admission does not match its trace")

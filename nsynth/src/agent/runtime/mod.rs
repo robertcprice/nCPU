@@ -10,6 +10,7 @@ mod execution_evidence_persistence;
 mod execution_trace;
 mod state_machine;
 mod tool_execution_chain;
+mod tool_plan_induction;
 
 pub use budget::{AgentRunBudget, BudgetExhausted};
 pub use capability_admission::{CapabilityAdmission, CapabilityGraphAdmissionError};
@@ -31,4 +32,8 @@ pub use tool_execution_chain::{
     ObservedToolFailure, ObservedToolFailureKind, ObservedToolOutput, ToolArgumentBinding,
     ToolChainError, ToolChainExecutor, ToolChainOutcome, ToolExecutionChain, ToolExecutionPlan,
     ToolExecutionPolicy, ToolPlanError, ToolStepObservation, ToolStepResult, ToolStepSpec,
+};
+pub use tool_plan_induction::{
+    InducedStepGraphs, InductionError, InductionSeed, StepGraphInductionRequest,
+    ToolStepGraphInducer, UncomposableCapability, UncomposableReason,
 };

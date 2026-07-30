@@ -397,7 +397,9 @@ mod tests {
     use crate::benchmark::HoldoutSource;
     use crate::benchmark::{Example as BenchmarkExample, Value};
     use crate::linguigenesis_bridge::LinguigenesisBridge;
-    use linguigenesis_core::capability_learning::{GraphId, SchemaVersion, SemanticGraph};
+    use linguigenesis_core::capability_learning::{
+        read_verified_capability_contracts, CapabilitySlot, GraphId, SchemaVersion, SemanticGraph,
+    };
     use linguigenesis_core::entity::{Entity, EntityId, EntityType};
     use linguigenesis_core::registry::Registry;
 
@@ -629,6 +631,57 @@ mod tests {
             .admit_into_canonical_graph(&trace, &registry, &mut graph)
             .expect("idempotent canonical admission");
         assert!(!replay.graph_changed);
+    }
+
+    #[test]
+    fn a_declared_contract_is_digest_bound_and_reaches_the_canonical_graph() {
+        let problem = square_problem();
+        let trace = CapsuleExecutor::execute(&capsule(&problem, true), &problem).expect("trace");
+        let bare =
+            CapabilityAdmission::from_verified_trace(&trace, 17, "square", "square_conformance")
+                .expect("proposal");
+        let declared = vec![
+            CapabilitySlot::consumed("operand", 17),
+            CapabilitySlot::produced_content(17),
+        ];
+        let contracted = bare
+            .clone()
+            .with_contract(declared.clone(), &trace)
+            .expect("contracted proposal");
+        assert_ne!(contracted.admission_digest, bare.admission_digest);
+        contracted
+            .validate_against(&trace)
+            .expect("contract integrity");
+
+        let mut tampered = contracted.clone();
+        tampered.contract[0].name = "value".into();
+        assert!(matches!(
+            tampered.validate_against(&trace),
+            Err(TraceError::AdmissionDigestMismatch)
+        ));
+
+        let mut outside_lineage = contracted.clone();
+        outside_lineage.contract = vec![CapabilitySlot::consumed("operand", 4242)];
+        assert!(matches!(
+            outside_lineage.validate_against(&trace),
+            Err(TraceError::AdmissionContract(_))
+        ));
+
+        let registry = Registry::new();
+        registry
+            .add_entity(Entity::new(17, "square".into(), EntityType::Function))
+            .expect("canonical entity");
+        let mut graph = SemanticGraph::new(
+            GraphId::new("canonical:ncpu-contract-test"),
+            SchemaVersion::new("usg-0.1.0"),
+        );
+        contracted
+            .admit_into_canonical_graph(&trace, &registry, &mut graph)
+            .expect("canonical admission");
+        let contracts = read_verified_capability_contracts(&graph);
+        assert_eq!(contracts.len(), 1);
+        assert_eq!(contracts[0].capability_name, "square");
+        assert_eq!(contracts[0].slots, declared);
     }
 
     #[test]

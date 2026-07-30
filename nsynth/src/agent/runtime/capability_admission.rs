@@ -7,9 +7,9 @@
 use super::{ContentDigest, ExecutionTrace, TraceError, SCHEMA_VERSION};
 use crate::agent::capability_registry::{CapabilityRecord, CapabilityStatus};
 use linguigenesis_core::capability_learning::{
-    admit_verified_capability, CanonicalCapabilityAdmissionError,
-    CanonicalCapabilityAdmissionReceipt, SemanticGraph, VerifiedCapabilityAdmissionRequest,
-    CAPABILITY_ADMISSION_SCHEMA_VERSION,
+    admit_verified_capability, validate_capability_slots, CanonicalCapabilityAdmissionError,
+    CanonicalCapabilityAdmissionReceipt, CapabilitySlot, SemanticGraph,
+    VerifiedCapabilityAdmissionRequest, CAPABILITY_ADMISSION_SCHEMA_VERSION,
 };
 use linguigenesis_core::entity::EntityId;
 use linguigenesis_core::registry::Registry;
@@ -26,6 +26,10 @@ pub struct CapabilityAdmission {
     pub artifact_digest: ContentDigest,
     pub evidence_entity_ids: Vec<EntityId>,
     pub record: CapabilityRecord,
+    /// Typed values this capability consumes and produces. Empty means the
+    /// capability declares no composable contract.
+    #[serde(default)]
+    pub contract: Vec<CapabilitySlot>,
     pub admission_digest: ContentDigest,
 }
 
@@ -38,6 +42,7 @@ struct AdmissionPayload<'a> {
     artifact_digest: &'a ContentDigest,
     evidence_entity_ids: &'a [EntityId],
     record: &'a CapabilityRecord,
+    contract: &'a [CapabilitySlot],
 }
 
 impl CapabilityAdmission {
@@ -77,6 +82,7 @@ impl CapabilityAdmission {
             artifact_digest: trace.artifact_digest.clone(),
             evidence_entity_ids: trace.evidence_entity_ids.clone(),
             record,
+            contract: Vec::new(),
             admission_digest: ContentDigest::sha256(&[]),
         };
         admission.admission_digest = admission.recompute_digest()?;
@@ -84,8 +90,28 @@ impl CapabilityAdmission {
         Ok(admission)
     }
 
+    /// Declare the typed values this capability consumes and produces.
+    ///
+    /// The contract is bound into the admission digest, so a later mutation of
+    /// any slot invalidates the proposal.
+    pub fn with_contract(
+        mut self,
+        mut contract: Vec<CapabilitySlot>,
+        trace: &ExecutionTrace,
+    ) -> Result<Self, TraceError> {
+        contract.sort_by(|left, right| {
+            (left.role, left.name.as_str()).cmp(&(right.role, right.name.as_str()))
+        });
+        self.contract = contract;
+        self.admission_digest = self.recompute_digest()?;
+        self.validate_against(trace)?;
+        Ok(self)
+    }
+
     pub fn validate_against(&self, trace: &ExecutionTrace) -> Result<(), TraceError> {
         trace.validate_integrity()?;
+        validate_capability_slots(&self.contract, &self.evidence_entity_ids)
+            .map_err(TraceError::AdmissionContract)?;
         if trace
             .evidence_entity_ids
             .binary_search(&self.canonical_entity_id)
@@ -136,6 +162,7 @@ impl CapabilityAdmission {
             verification_trace_digest: self.verification_trace_digest.to_string(),
             artifact_digest: self.artifact_digest.to_string(),
             evidence_entity_ids: self.evidence_entity_ids.clone(),
+            slots: self.contract.clone(),
             capability_name: self.record.name.clone(),
             conformance_test: self
                 .record
@@ -163,6 +190,7 @@ impl CapabilityAdmission {
             artifact_digest: &self.artifact_digest,
             evidence_entity_ids: &self.evidence_entity_ids,
             record: &self.record,
+            contract: &self.contract,
         };
         let bytes = serde_json::to_vec(&payload)
             .map_err(|error| TraceError::Encoding(error.to_string()))?;
