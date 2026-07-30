@@ -617,16 +617,14 @@ fn locate_coding_registry() -> std::path::PathBuf {
 }
 
 // ── FILTER composition (predicate stage): reduce ∘ filter(predicate) ─────────
-// The predicate adjectives (positive/negative/even) are NOT registry ops — they
-// ground to a comparison the solver must independently re-discover + strict-verify.
-
-// Comparison-predicate filters (item CMP 0) — the solver synthesizes these fast
-// (the cond-sum fold / searched filter). MODULUS predicates ("even"/"odd") are a
-// known follow-on: the cond-mod fold is harder and the router currently skips
-// enumerative for them, so they are exercised separately, not gated here.
+// Predicate entities are resolved through the canonical LinguaGenesis registry.
+// Their labeled behavior induces a comparison or periodic guard; the nSynth
+// solver must then independently re-discover the composed program and pass strict
+// verification. Neither comprehension nor emission branches on predicate names.
 const FILTER_PHRASES: &[&str] = &[
     "sum of the positive values",       // array_sum ∘ filter(item > 0)
     "the total of the negative values", // array_sum ∘ filter(item < 0)
+    "sum of the even numbers",           // array_sum ∘ filter(item mod 2 == 0)
 ];
 
 #[test]
@@ -670,6 +668,9 @@ fn filter_compositions_compute_intended() {
         ("sum of the positive values", &[-2, 3, -1, 5], 8),
         // total of negatives: -2 + -1 + -4 = -7
         ("the total of the negative values", &[-2, 3, -1, 5, -4], -7),
+        // Include negative values: normalized periodic residues must preserve
+        // ordinary mathematical parity rather than Rust's signed remainder.
+        ("sum of the even numbers", &[-4, -3, -2, -1, 0, 1, 2, 3, 4], 0),
     ];
     for (phrase, input, expected) in cases {
         let outcome = bridge

@@ -4035,7 +4035,11 @@ fn emit_filter_pipeline_reference(
         _ => "!=",
     };
     let cond = match filter.modulus {
-        Some(m) => format!("e % {} {} {}", m, cmp, filter.value),
+        // Normalize the residue so a behaviorally induced periodic predicate
+        // generalizes to negative integers too (`-5 mod 3 == 1`). The canonical
+        // registry examples determine `m` and the residue; no predicate name is
+        // consulted here.
+        Some(m) => format!("((e % {m}) + {m}) % {m} {cmp} {}", filter.value),
         None => format!("e {} {}", cmp, filter.value),
     };
     match fold {

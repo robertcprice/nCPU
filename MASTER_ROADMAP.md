@@ -570,19 +570,22 @@ An agent must not:
 
 ### 0.3 Current truth snapshot — update after every package
 
-**Snapshot date:** 2026-06-28
+**Snapshot date:** 2026-07-29
 **Repo-agent readiness:** roughly 55% of a trustworthy repo coding-agent shell
 **Universal-synthesis readiness:** roughly 15% of the intended LLM-free Mog/typed-program surface reachable from the agent path
 **MVP target:** Package H / Gate G5 is signed off; do not regress it
 **Benchmark-readiness target:** completion through Package M / Gate G7
 **Universal-synthesizer target:** U∞ gates in §0.6/§0.055/`nsynth/docs/UNIVERSAL_CODING_AGENT_PLAN.md`; G9 release is not the finish line
-**Active priority:** G6 durable agency (Package I/J) and G7 executable benchmark (Package M); LOOP-20A cleared the release/CI blockers.
+**Active priority:** G6 durable agency (Package I/J), G7 executable benchmark
+(Package M), and one proof-carrying LinguaGenesis → nSynth → nCPU vertical
+slice. The vertical slice must reuse Packages B/C/D/F rather than create a
+parallel agent or knowledge system.
 
 | Package | Gate | State | Evidence / blocker | Next owner action |
 |---|---|---|---|---|
 | A — baseline truth | G0 | IN PROGRESS (G0 largely closed) | compile-green; `agent::repo` 45/45; `agent::session` 7/7; `agent::tools` 32/32; `optimization::parallel` 23/23; search-only holdout verify green; `cargo fmt --check` green | G0 sign-off: full serial lib suite summary |
 | B — runtime contracts | G1 prerequisite | IMPLEMENTED | Phase 1 contracts + conformance suite — `docs/PACKAGE_B_GATE.md` | — |
-| C — Linguigenesis coding semantics | G1 | IMPLEMENTED (breadth-limited; *universal* NL claim EXPERIMENTAL) | emergent NL + negation + robustness corpus; `coding_registry.json` = **25 proven ops** (integrity gate `every_registry_operation_is_synthesizable`), 1 vocabulary-only gap (`reduce`); registry now git-tracked. See §0.8 | type/shape `Problem` targeting for unseen ops (queue item 6) |
+| C — Linguigenesis coding semantics | G1 | IMPLEMENTED (breadth-limited; *universal* NL claim EXPERIMENTAL) | emergent NL + negation + robustness corpus; `coding_registry.json` = **25 proven ops** (integrity gate `every_registry_operation_is_synthesizable`), 1 vocabulary-only gap (`reduce`); registry now git-tracked; filter guards are induced from typed registry behavior with lineage rather than a predicate-name switch (§0.5.1). See §0.8 | broaden the induced predicate grammar beyond one scalar comparison/periodic guard without weakening fail-closed evidence gates |
 | D — grounded bridge | G1 | IMPLEMENTED | `nl_to_requirement`, clarification (non-synthesis workflows exempt), `solve_from_description` | — |
 | E — repository model | G2 | IMPLEMENTED | `RepoIndex` + retrieval benchmark tests green | — |
 | F — secure tools | G3 | IMPLEMENTED | `SecureToolRuntime` deny-by-default + `for_general_agent` / `for_repo_repair`; HTTP host allowlist; verification cargo-only oracle | docs + HTTP CLI allowlist examples |
@@ -704,6 +707,53 @@ cargo test linguigenesis_bridge --lib
 - `solve_from_description` is the universal solver entry (no `nl` feature required);
 - low-confidence or non-empty `unresolved` triggers clarification via `CodingDialogue` / `BridgeError::ClarificationNeeded`;
 - quarantine `nl/mod.rs` from production (TODO — separate from emergent NL path).
+
+### 0.5.1 Package C/D correction — behavior-induced filter predicates (2026-07-29)
+
+**Defect:** the otherwise registry-driven composition path still contained one
+lexical semantic switch mapping the words positive/negative/nonnegative/
+nonpositive/nonzero/zero/even/odd directly to comparison and modulus constants.
+That was executable semantics hidden in Rust, so it violated the no-cheating
+contract even though the downstream solver still verified generated programs.
+
+**Correction:**
+
+1. LinguaGenesis first resolves a canonical unary scalar→boolean operation
+   through its existing registry graph.
+2. A focused `predicate_induction` module reads that entity's typed,
+   non-conflicting labeled examples and selects the structurally simplest guard
+   that reproduces every row.
+3. The resulting `FilterPred` carries the canonical entity ID, executable
+   function name, and number of evidence examples.
+4. Sparse, one-sided, conflicting, unsupported-type, and multi-predicate inputs
+   fail closed. Period candidates come only from observed repeated-label
+   distances, use overflow-safe arithmetic, and never trigger unbounded divisor
+   enumeration.
+5. The nSynth bridge consumes only the typed guard. Periodic emission uses a
+   normalized signed residue, so negative integers match the induced
+   mathematical behavior. Predicate names are not inspected.
+
+**Verified evidence:**
+
+```text
+LinguaGenesis predicate-induction unit slice: 7 passed, 0 failed
+LinguaGenesis complete linguigenesis-core lib: 152 passed, 0 failed
+nSynth filter integration: 2 passed, 0 failed
+```
+
+The nSynth integration covers three phrases resolved to independent canonical
+entities (positive, negative, even), strict-verifies synthesized filter
+pipelines, and executes periodic behavior over negative inputs. An artificial
+unseen modulo-3 predicate with a nonsense lemma proves that the induction
+algorithm is driven by labels rather than vocabulary.
+
+**Honest broader baseline:** the full `nl_unseen_phrasing` target currently
+passes **9/13**. The four max/chain failures were reproduced with
+`NSYNTH_CACHE_PATH=''` against an archived clean LinguaGenesis `origin/main`;
+the representative failure is inability to behavior-classify `array_max` for
+`largest of the incremented values`. They predate this correction but remain
+open defects. Integration evidence must disable the durable solved cache when a
+cold solve is claimed.
 
 ### 0.6 Package C2 — Truly emergent NL resolution (COMPLETE 2026-06-21)
 
